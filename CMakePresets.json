@@ -6,6 +6,29 @@
         "patch": 0
     },
     "configurePresets": [
+      {
+          "name": "jsconly",
+          "binaryDir": "WebKitBuild/JSCOnly",
+          "generator": "Ninja",
+          "cacheVariables": {
+              "CMAKE_BUILD_TYPE": {
+                  "type": "STRING",
+                  "value": "Release"
+              },
+              "ENABLE_TOOLS": {
+                  "type": "BOOL",
+                 "value": "OFF"
+              },
+              "EVENT_LOOP_TYPE": {
+                  "type": "STRING",
+                 "value": "Windows"
+              },
+              "PORT": {
+                  "type": "STRING",
+                 "value": "JSCOnly"
+            }
+          }
+        },
         {
             "name": "release",
             "hidden": true,
@@ -79,6 +102,10 @@
         }
     ],
     "buildPresets": [
+        {
+          "name": "jsconly",
+          "configurePreset": "jsconly"
+        },
         {
             "name": "gtk-release",
             "displayName": "GTK Release",
