@@ -19,13 +19,13 @@
                   "type": "BOOL",
                  "value": "OFF"
               },
-              "EVENT_LOOP_TYPE": {
-                  "type": "STRING",
-                 "value": "Windows"
-              },
               "PORT": {
                   "type": "STRING",
                  "value": "JSCOnly"
+            },
+            "DEVELOPER_MODE": {
+                "type": "BOOL",
+                "value": "ON"
             }
           }
         },
