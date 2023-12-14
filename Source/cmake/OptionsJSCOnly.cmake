@@ -1,216 +1,92 @@
 if(WIN32)
-  set(PORT Win)
+    set(PORT Win)
 
-  # Use Release DLL CRT even for Debug build
-  set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreadedDLL)
+    # Use Release DLL CRT even for Debug build
+    set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreadedDLL)
 
-  if (MSVC)
-    include(OptionsMSVC)
-  endif ()
-
-  # Define minimum supported Windows version
-  # https://msdn.microsoft.com/en-us/library/6sehtctf.aspx
-  #
-  # Windows 10 1809 "Redstone 5" NTDDI_WIN10_RS5 (0x0A000006)
-  # https://learn.microsoft.com/en-us/windows/win32/winprog/using-the-windows-headers?redirectedfrom=MSDN#macros-for-conditional-declarations
-  #
-  # Supported versions of Windows client
-  # https://learn.microsoft.com/en-us/windows/release-health/supported-versions-windows-client
-  add_definitions(-D_WINDOWS -DNTDDI_VERSION=0x0A000006 -D_WIN32_WINNT=0x0A00)
-
-  add_definitions(-DNOMINMAX)
-  add_definitions(-DUNICODE -D_UNICODE)
-  add_definitions(-DNOCRYPT)
-
-  # If <winsock2.h> is not included before <windows.h> redefinition errors occur
-  # unless _WINSOCKAPI_ is defined before <windows.h> is included
-  add_definitions(-D_WINSOCKAPI_=)
-
-  WEBKIT_OPTION_BEGIN()
-  WEBKIT_OPTION_DEFINE(ENABLE_STATIC_JSC "Whether to build JavaScriptCore as a static library." PUBLIC OFF)
-  WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_REMOTE_INSPECTOR PRIVATE OFF)
-  if (WIN32)
-    # FIXME: Enable FTL on Windows. https://bugs.webkit.org/show_bug.cgi?id=145366
-    WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_FTL_JIT PRIVATE OFF)
-    # FIXME: Port bmalloc to Windows. https://bugs.webkit.org/show_bug.cgi?id=143310
-    WEBKIT_OPTION_DEFAULT_PORT_VALUE(USE_SYSTEM_MALLOC PRIVATE ON)
-    WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_WEBASSEMBLY PRIVATE ON)
-  endif ()
-  WEBKIT_OPTION_END()
-
-  set(ENABLE_WEBCORE OFF)
-  set(ENABLE_WEBKIT_LEGACY OFF)
-  set(ENABLE_WEBKIT OFF)
-  set(ENABLE_WEBINSPECTORUI OFF)
-  set(ENABLE_WEBGL OFF)
-
-  if (WIN32)
-    set(ENABLE_API_TESTS OFF)
-  else ()
-    set(ENABLE_API_TESTS ON)
-  endif ()
-  
-  if (NOT WEBKIT_LIBRARIES_DIR)
-    if (DEFINED ENV{WEBKIT_LIBRARIES})
-      file(TO_CMAKE_PATH "$ENV{WEBKIT_LIBRARIES}" WEBKIT_LIBRARIES_DIR)
-    else ()
-      file(TO_CMAKE_PATH "${CMAKE_SOURCE_DIR}/WebKitLibraries/win" WEBKIT_LIBRARIES_DIR)
+    if (MSVC)
+        include(OptionsMSVC)
     endif ()
-  endif ()
 
-  message(STATUS "Using WebKit Libraries from ${WEBKIT_LIBRARIES_DIR}")
+    # Define minimum supported Windows version
+    # https://msdn.microsoft.com/en-us/library/6sehtctf.aspx
+    #
+    # Windows 10 1809 "Redstone 5" NTDDI_WIN10_RS5 (0x0A000006)
+    # https://learn.microsoft.com/en-us/windows/win32/winprog/using-the-windows-headers?redirectedfrom=MSDN#macros-for-conditional-declarations
+    #
+    # Supported versions of Windows client
+    # https://learn.microsoft.com/en-us/windows/release-health/supported-versions-windows-client
+    add_definitions(-D_WINDOWS -DNTDDI_VERSION=0x0A000006 -D_WIN32_WINNT=0x0A00)
 
-  if (DEFINED ENV{WEBKIT_IGNORE_PATH})
-    set(CMAKE_IGNORE_PATH $ENV{WEBKIT_IGNORE_PATH})
-  endif ()
-
-  set(CMAKE_PREFIX_PATH ${WEBKIT_LIBRARIES_DIR})
-
-  set(WEBKIT_LIBRARIES_INCLUDE_DIR "${WEBKIT_LIBRARIES_DIR}/include")
-  include_directories(${WEBKIT_LIBRARIES_INCLUDE_DIR})
-
-  if (${WTF_CPU_X86})
-    set_property(GLOBAL PROPERTY FIND_LIBRARY_USE_LIB32_PATHS ON)
-    set_property(GLOBAL PROPERTY FIND_LIBRARY_USE_LIB64_PATHS OFF)
-    set(WEBKIT_LIBRARIES_LINK_DIR "${WEBKIT_LIBRARIES_DIR}/lib32")
-    # FIXME: Remove ${WEBKIT_LIBRARIES_LINK_DIR} when find_library is used for everything
-    link_directories("${CMAKE_BINARY_DIR}/lib32" "${WEBKIT_LIBRARIES_LINK_DIR}")
-    set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib32)
-    set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib32)
-    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin32)
-  else ()
-    set_property(GLOBAL PROPERTY FIND_LIBRARY_USE_LIB32_PATHS OFF)
-    set_property(GLOBAL PROPERTY FIND_LIBRARY_USE_LIB64_PATHS ON)
-    set(WEBKIT_LIBRARIES_LINK_DIR "${WEBKIT_LIBRARIES_DIR}/lib64")
-    # FIXME: Remove ${WEBKIT_LIBRARIES_LINK_DIR} when find_library is used for everything
-    link_directories("${CMAKE_BINARY_DIR}/lib64" "${WEBKIT_LIBRARIES_LINK_DIR}")
-    set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib64)
-    set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib64)
-    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin64)
-  endif ()
-
-  set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_DEBUG "${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}")
-  set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_RELEASE "${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}")
-  set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")
-  set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")
-  set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
-  set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
-
-  set(CMAKE_DISABLE_PRECOMPILE_HEADERS OFF)
-
-  set(ICU_DEBUG ON)
-  set(ICU_ROOT "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows")
-  find_package(ICU 61.2 REQUIRED COMPONENTS data i18n uc)
-  if(ICU_FOUND)
-     message(">> ICU_FOUND ${ICU_FOUND} ${ICU_VERSION} ${ICU_LIBRARIES} ${ICU_INCLUDE_DIRS}")
-  else()
-     message(FATAL_ERROR ">> ICU not found")
-  endif()
-
-
-  SET_AND_EXPOSE_TO_BUILD(ENABLE_DEVELOPER_MODE ${DEVELOPER_MODE})
-
-  SET_AND_EXPOSE_TO_BUILD(HAVE_OS_DARK_MODE_SUPPORT 1)
-
-  # See if OpenSSL implementation is BoringSSL
-  cmake_push_check_state()
-  set(CMAKE_REQUIRED_INCLUDES "${OPENSSL_INCLUDE_DIR}")
-  set(CMAKE_REQUIRED_LIBRARIES "${OPENSSL_LIBRARIES}")
-  WEBKIT_CHECK_HAVE_SYMBOL(USE_BORINGSSL OPENSSL_IS_BORINGSSL openssl/ssl.h)
-  cmake_pop_check_state()
-
-  set(bmalloc_LIBRARY_TYPE OBJECT)
-  set(WTF_LIBRARY_TYPE SHARED)
-  set(JavaScriptCore_LIBRARY_TYPE SHARED)
-  set(PAL_LIBRARY_TYPE OBJECT)
-  set(WebCore_LIBRARY_TYPE SHARED)
-  set(WebCoreTestSupport_LIBRARY_TYPE OBJECT)
-else ()
-  find_package(Threads REQUIRED)
-
-  if (MSVC)
-    include(OptionsMSVC)
-  else ()
-    set(CMAKE_C_VISIBILITY_PRESET hidden)
-    set(CMAKE_CXX_VISIBILITY_PRESET hidden)
-    set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
-  endif ()
-
-  add_definitions(-DBUILDING_JSCONLY__)
-
-  set(PROJECT_VERSION_MAJOR 1)
-  set(PROJECT_VERSION_MINOR 0)
-  set(PROJECT_VERSION_MICRO 0)
-  set(PROJECT_VERSION ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${PROJECT_VERSION_MICRO})
-
-  WEBKIT_OPTION_BEGIN()
-  WEBKIT_OPTION_DEFINE(ENABLE_STATIC_JSC "Whether to build JavaScriptCore as a static library." PUBLIC OFF)
-  WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_REMOTE_INSPECTOR PRIVATE OFF)
-  if (WIN32)
-    # FIXME: Enable FTL on Windows. https://bugs.webkit.org/show_bug.cgi?id=145366
-    WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_FTL_JIT PRIVATE OFF)
-    # FIXME: Port bmalloc to Windows. https://bugs.webkit.org/show_bug.cgi?id=143310
-    WEBKIT_OPTION_DEFAULT_PORT_VALUE(USE_SYSTEM_MALLOC PRIVATE ON)
-    WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_WEBASSEMBLY PRIVATE ON)
-  endif ()
-
-  WEBKIT_OPTION_END()
-
-  set(ALL_EVENT_LOOP_TYPES
-    GLib
-    Generic
-  )
-
-  set(DEFAULT_EVENT_LOOP_TYPE "Generic")
-
-  set(EVENT_LOOP_TYPE ${DEFAULT_EVENT_LOOP_TYPE} CACHE STRING "Implementation of event loop to be used in JavaScriptCore (one of ${ALL_EVENT_LOOP_TYPES})")
-
-  set(ENABLE_WEBCORE OFF)
-  set(ENABLE_WEBKIT_LEGACY OFF)
-  set(ENABLE_WEBKIT OFF)
-  set(ENABLE_WEBINSPECTORUI OFF)
-  set(ENABLE_WEBGL OFF)
-
-  if (WIN32)
-    set(ENABLE_API_TESTS OFF)
-  else ()
-    set(ENABLE_API_TESTS ON)
-  endif ()
-
-  if (WTF_CPU_ARM OR WTF_CPU_MIPS)
-    SET_AND_EXPOSE_TO_BUILD(USE_CAPSTONE TRUE)
-  endif ()
-
-  # FIXME: JSCOnly on WIN32 seems to only work with fully static build
-  # https://bugs.webkit.org/show_bug.cgi?id=172862
-  if (NOT ENABLE_STATIC_JSC AND NOT WIN32)
-    set(JavaScriptCore_LIBRARY_TYPE SHARED)
-    set(bmalloc_LIBRARY_TYPE OBJECT)
-    set(WTF_LIBRARY_TYPE OBJECT)
-  endif ()
-
-  if (WIN32)
     add_definitions(-DNOMINMAX)
-    add_definitions(-D_WINDOWS -DWINVER=0x601 -D_WIN32_WINNT=0x601)
     add_definitions(-DUNICODE -D_UNICODE)
+    add_definitions(-DNOCRYPT)
+
+    # If <winsock2.h> is not included before <windows.h> redefinition errors occur
+    # unless _WINSOCKAPI_ is defined before <windows.h> is included
+    add_definitions(-D_WINSOCKAPI_=)
+
+    WEBKIT_OPTION_BEGIN()
+    WEBKIT_OPTION_DEFINE(ENABLE_STATIC_JSC "Whether to build JavaScriptCore as a static library." PUBLIC OFF)
+    WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_REMOTE_INSPECTOR PRIVATE OFF)
+    if (WIN32)
+        # FIXME: Enable FTL on Windows. https://bugs.webkit.org/show_bug.cgi?id=145366
+        WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_FTL_JIT PRIVATE OFF)
+        # FIXME: Port bmalloc to Windows. https://bugs.webkit.org/show_bug.cgi?id=143310
+        WEBKIT_OPTION_DEFAULT_PORT_VALUE(USE_SYSTEM_MALLOC PRIVATE ON)
+        WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_WEBASSEMBLY PRIVATE ON)
+    endif ()
+    WEBKIT_OPTION_END()
+
+    set(ENABLE_WEBCORE OFF)
+    set(ENABLE_WEBKIT_LEGACY OFF)
+    set(ENABLE_WEBKIT OFF)
+    set(ENABLE_WEBINSPECTORUI OFF)
+    set(ENABLE_WEBGL OFF)
+
+    if (WIN32)
+        set(ENABLE_API_TESTS OFF)
+    else ()
+        set(ENABLE_API_TESTS ON)
+    endif ()
 
     if (NOT WEBKIT_LIBRARIES_DIR)
-      if (DEFINED ENV{WEBKIT_LIBRARIES})
-        set(WEBKIT_LIBRARIES_DIR "$ENV{WEBKIT_LIBRARIES}")
-      else ()
-        set(WEBKIT_LIBRARIES_DIR "${CMAKE_SOURCE_DIR}/WebKitLibraries/win")
-      endif ()
+        if (DEFINED ENV{WEBKIT_LIBRARIES})
+            file(TO_CMAKE_PATH "$ENV{WEBKIT_LIBRARIES}" WEBKIT_LIBRARIES_DIR)
+        else ()
+            file(TO_CMAKE_PATH "${CMAKE_SOURCE_DIR}/WebKitLibraries/win" WEBKIT_LIBRARIES_DIR)
+        endif ()
+    endif ()
+
+    message(STATUS "Using WebKit Libraries from ${WEBKIT_LIBRARIES_DIR}")
+
+    if (DEFINED ENV{WEBKIT_IGNORE_PATH})
+        set(CMAKE_IGNORE_PATH $ENV{WEBKIT_IGNORE_PATH})
     endif ()
 
     set(CMAKE_PREFIX_PATH ${WEBKIT_LIBRARIES_DIR})
 
-    if (WTF_CPU_X86_64)
-      set_property(GLOBAL PROPERTY FIND_LIBRARY_USE_LIB32_PATHS OFF)
-      set_property(GLOBAL PROPERTY FIND_LIBRARY_USE_LIB64_PATHS ON)
+    set(WEBKIT_LIBRARIES_INCLUDE_DIR "${WEBKIT_LIBRARIES_DIR}/include")
+    include_directories(${WEBKIT_LIBRARIES_INCLUDE_DIR})
 
-      set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib64)
-      set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib64)
-      set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin64)
+    if (${WTF_CPU_X86})
+        set_property(GLOBAL PROPERTY FIND_LIBRARY_USE_LIB32_PATHS ON)
+        set_property(GLOBAL PROPERTY FIND_LIBRARY_USE_LIB64_PATHS OFF)
+        set(WEBKIT_LIBRARIES_LINK_DIR "${WEBKIT_LIBRARIES_DIR}/lib32")
+        # FIXME: Remove ${WEBKIT_LIBRARIES_LINK_DIR} when find_library is used for everything
+        link_directories("${CMAKE_BINARY_DIR}/lib32" "${WEBKIT_LIBRARIES_LINK_DIR}")
+        set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib32)
+        set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib32)
+        set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin32)
+    else ()
+        set_property(GLOBAL PROPERTY FIND_LIBRARY_USE_LIB32_PATHS OFF)
+        set_property(GLOBAL PROPERTY FIND_LIBRARY_USE_LIB64_PATHS ON)
+        set(WEBKIT_LIBRARIES_LINK_DIR "${WEBKIT_LIBRARIES_DIR}/lib64")
+        # FIXME: Remove ${WEBKIT_LIBRARIES_LINK_DIR} when find_library is used for everything
+        link_directories("${CMAKE_BINARY_DIR}/lib64" "${WEBKIT_LIBRARIES_LINK_DIR}")
+        set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib64)
+        set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib64)
+        set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin64)
     endif ()
 
     set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_DEBUG "${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}")
@@ -219,21 +95,145 @@ else ()
     set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
-  endif ()
 
-  string(TOLOWER ${EVENT_LOOP_TYPE} LOWERCASE_EVENT_LOOP_TYPE)
-  if (LOWERCASE_EVENT_LOOP_TYPE STREQUAL "glib")
-    find_package(GLIB 2.36 REQUIRED COMPONENTS gio gio-unix gobject)
-    SET_AND_EXPOSE_TO_BUILD(USE_GLIB 1)
-    SET_AND_EXPOSE_TO_BUILD(USE_GLIB_EVENT_LOOP 1)
-    SET_AND_EXPOSE_TO_BUILD(WTF_DEFAULT_EVENT_LOOP 0)
-  else ()
-    SET_AND_EXPOSE_TO_BUILD(USE_GENERIC_EVENT_LOOP 1)
-    SET_AND_EXPOSE_TO_BUILD(WTF_DEFAULT_EVENT_LOOP 0)
-  endif ()
+    set(CMAKE_DISABLE_PRECOMPILE_HEADERS OFF)
 
-  find_package(ICU 61.2 REQUIRED COMPONENTS data i18n uc)
-  if (APPLE)
-    add_definitions(-DU_DISABLE_RENAMING=1)
-  endif ()
+    set(ICU_DEBUG ON)
+    set(ICU_ROOT "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows")
+    find_package(ICU 61.2 REQUIRED COMPONENTS data i18n uc)
+    if(ICU_FOUND)
+        message(">> ICU_FOUND ${ICU_FOUND} ${ICU_VERSION} ${ICU_LIBRARIES} ${ICU_INCLUDE_DIRS}")
+    else()
+        message(FATAL_ERROR ">> ICU not found")
+    endif()
+
+
+    SET_AND_EXPOSE_TO_BUILD(ENABLE_DEVELOPER_MODE ${DEVELOPER_MODE})
+
+    SET_AND_EXPOSE_TO_BUILD(HAVE_OS_DARK_MODE_SUPPORT 1)
+
+    # See if OpenSSL implementation is BoringSSL
+    cmake_push_check_state()
+    set(CMAKE_REQUIRED_INCLUDES "${OPENSSL_INCLUDE_DIR}")
+    set(CMAKE_REQUIRED_LIBRARIES "${OPENSSL_LIBRARIES}")
+    WEBKIT_CHECK_HAVE_SYMBOL(USE_BORINGSSL OPENSSL_IS_BORINGSSL openssl/ssl.h)
+    cmake_pop_check_state()
+
+    set(bmalloc_LIBRARY_TYPE OBJECT)
+    set(WTF_LIBRARY_TYPE SHARED)
+    set(JavaScriptCore_LIBRARY_TYPE SHARED)
+    set(PAL_LIBRARY_TYPE OBJECT)
+    set(WebCore_LIBRARY_TYPE SHARED)
+    set(WebCoreTestSupport_LIBRARY_TYPE OBJECT)
+else ()
+    find_package(Threads REQUIRED)
+
+    if (MSVC)
+        include(OptionsMSVC)
+    else ()
+        set(CMAKE_C_VISIBILITY_PRESET hidden)
+        set(CMAKE_CXX_VISIBILITY_PRESET hidden)
+        set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
+    endif ()
+
+    add_definitions(-DBUILDING_JSCONLY__)
+
+    set(PROJECT_VERSION_MAJOR 1)
+    set(PROJECT_VERSION_MINOR 0)
+    set(PROJECT_VERSION_MICRO 0)
+    set(PROJECT_VERSION ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${PROJECT_VERSION_MICRO})
+
+    WEBKIT_OPTION_BEGIN()
+    WEBKIT_OPTION_DEFINE(ENABLE_STATIC_JSC "Whether to build JavaScriptCore as a static library." PUBLIC OFF)
+    WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_REMOTE_INSPECTOR PRIVATE OFF)
+    if (WIN32)
+        # FIXME: Enable FTL on Windows. https://bugs.webkit.org/show_bug.cgi?id=145366
+        WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_FTL_JIT PRIVATE OFF)
+        # FIXME: Port bmalloc to Windows. https://bugs.webkit.org/show_bug.cgi?id=143310
+        WEBKIT_OPTION_DEFAULT_PORT_VALUE(USE_SYSTEM_MALLOC PRIVATE ON)
+        WEBKIT_OPTION_DEFAULT_PORT_VALUE(ENABLE_WEBASSEMBLY PRIVATE ON)
+    endif ()
+
+    WEBKIT_OPTION_END()
+
+    set(ALL_EVENT_LOOP_TYPES
+      GLib
+      Generic
+    )
+
+    set(DEFAULT_EVENT_LOOP_TYPE "Generic")
+
+    set(EVENT_LOOP_TYPE ${DEFAULT_EVENT_LOOP_TYPE} CACHE STRING "Implementation of event loop to be used in JavaScriptCore (one of ${ALL_EVENT_LOOP_TYPES})")
+
+    set(ENABLE_WEBCORE OFF)
+    set(ENABLE_WEBKIT_LEGACY OFF)
+    set(ENABLE_WEBKIT OFF)
+    set(ENABLE_WEBINSPECTORUI OFF)
+    set(ENABLE_WEBGL OFF)
+
+    if (WIN32)
+        set(ENABLE_API_TESTS OFF)
+    else ()
+        set(ENABLE_API_TESTS ON)
+    endif ()
+
+    if (WTF_CPU_ARM OR WTF_CPU_MIPS)
+        SET_AND_EXPOSE_TO_BUILD(USE_CAPSTONE TRUE)
+    endif ()
+
+    # FIXME: JSCOnly on WIN32 seems to only work with fully static build
+    # https://bugs.webkit.org/show_bug.cgi?id=172862
+    if (NOT ENABLE_STATIC_JSC AND NOT WIN32)
+        set(JavaScriptCore_LIBRARY_TYPE SHARED)
+        set(bmalloc_LIBRARY_TYPE OBJECT)
+        set(WTF_LIBRARY_TYPE OBJECT)
+    endif ()
+
+    if (WIN32)
+        add_definitions(-DNOMINMAX)
+        add_definitions(-D_WINDOWS -DWINVER=0x601 -D_WIN32_WINNT=0x601)
+        add_definitions(-DUNICODE -D_UNICODE)
+
+        if (NOT WEBKIT_LIBRARIES_DIR)
+            if (DEFINED ENV{WEBKIT_LIBRARIES})
+                set(WEBKIT_LIBRARIES_DIR "$ENV{WEBKIT_LIBRARIES}")
+            else ()
+                set(WEBKIT_LIBRARIES_DIR "${CMAKE_SOURCE_DIR}/WebKitLibraries/win")
+            endif ()
+        endif ()
+
+        set(CMAKE_PREFIX_PATH ${WEBKIT_LIBRARIES_DIR})
+
+        if (WTF_CPU_X86_64)
+            set_property(GLOBAL PROPERTY FIND_LIBRARY_USE_LIB32_PATHS OFF)
+            set_property(GLOBAL PROPERTY FIND_LIBRARY_USE_LIB64_PATHS ON)
+
+            set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib64)
+            set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib64)
+            set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin64)
+        endif ()
+
+        set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_DEBUG "${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}")
+        set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_RELEASE "${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}")
+        set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")
+        set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")
+        set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+        set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+    endif ()
+
+    string(TOLOWER ${EVENT_LOOP_TYPE} LOWERCASE_EVENT_LOOP_TYPE)
+    if (LOWERCASE_EVENT_LOOP_TYPE STREQUAL "glib")
+        find_package(GLIB 2.36 REQUIRED COMPONENTS gio gio-unix gobject)
+        SET_AND_EXPOSE_TO_BUILD(USE_GLIB 1)
+        SET_AND_EXPOSE_TO_BUILD(USE_GLIB_EVENT_LOOP 1)
+        SET_AND_EXPOSE_TO_BUILD(WTF_DEFAULT_EVENT_LOOP 0)
+    else ()
+        SET_AND_EXPOSE_TO_BUILD(USE_GENERIC_EVENT_LOOP 1)
+        SET_AND_EXPOSE_TO_BUILD(WTF_DEFAULT_EVENT_LOOP 0)
+    endif ()
+
+    find_package(ICU 61.2 REQUIRED COMPONENTS data i18n uc)
+    if (APPLE)
+        add_definitions(-DU_DISABLE_RENAMING=1)
+    endif ()
 endif ()
