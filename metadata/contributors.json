@@ -3661,6 +3661,13 @@
    },
    {
       "emails" : [
+         "james_e_kim@apple.com"
+      ],
+      "github" : "james-e-kim",
+      "name" : "James Kim"
+   },
+   {
+      "emails" : [
          "koz@chromium.org",
          "koz@google.com"
       ],
@@ -4311,7 +4318,8 @@
       "name" : "Joshua Hoffman",
       "nicks" : [
          "hoffmanjoshua"
-      ]
+      ],
+      "status" : "committer"
    },
    {
       "emails" : [
@@ -5290,6 +5298,13 @@
       "nicks" : [
          "marywu"
       ]
+   },
+   {
+      "emails" : [
+         "krzywix@apple.com"
+      ],
+      "github" : "mkrzywix",
+      "name" : "Mateusz Krzywicki"
    },
    {
       "emails" : [

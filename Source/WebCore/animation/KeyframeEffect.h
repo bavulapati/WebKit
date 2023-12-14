@@ -174,7 +174,8 @@ public:
     bool preventsAcceleration() const;
     void effectStackNoLongerPreventsAcceleration();
     void effectStackNoLongerAllowsAcceleration();
-    void wasRemovedFromStack();
+    void wasAddedToEffectStack();
+    void wasRemovedFromEffectStack();
 
     void lastStyleChangeEventStyleDidChange(const RenderStyle* previousStyle, const RenderStyle* currentStyle);
     void acceleratedPropertiesOverriddenByCascadeDidChange();
@@ -231,6 +232,7 @@ private:
     void computeHasExplicitlyInheritedKeyframeProperty();
     void computeHasAcceleratedPropertyOverriddenByCascadeProperty();
     void computeHasReferenceFilter();
+    void computeHasSizeDependentTransform();
     void abilityToBeAcceleratedDidChange();
     void updateAcceleratedAnimationIfNecessary();
 
@@ -261,7 +263,7 @@ private:
     void animationDidFinish() final;
     void setAnimation(WebAnimation*) final;
     Seconds timeToNextTick(const BasicEffectTiming&) const final;
-    bool ticksContinouslyWhileActive() const final;
+    bool ticksContinuouslyWhileActive() const final;
     std::optional<double> progressUntilNextStep(double) const final;
     bool preventsAnimationReadiness() const final;
 
@@ -301,6 +303,9 @@ private:
     bool m_hasExplicitlyInheritedKeyframeProperty { false };
     bool m_hasAcceleratedPropertyOverriddenByCascadeProperty { false };
     bool m_hasReferenceFilter { false };
+    bool m_hasWidthDependentTransform { false };
+    bool m_hasHeightDependentTransform { false };
+    bool m_animatesSizeAndSizeDependentTransform { false };
 };
 
 } // namespace WebCore

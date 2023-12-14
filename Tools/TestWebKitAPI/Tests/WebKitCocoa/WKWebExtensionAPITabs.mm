@@ -39,6 +39,8 @@ static auto *tabsManifest = @{
     @"description": @"Tabs Test",
     @"version": @"1",
 
+    @"options_page": @"options.html",
+
     @"background": @{
         @"scripts": @[ @"background.js" ],
         @"type": @"module",
@@ -104,7 +106,7 @@ TEST(WKWebExtensionAPITabs, Errors)
         @"browser.test.assertThrows(() => browser.tabs.get(-3), /'tabId' value is invalid, because it is not a tab identifier/i)",
         @"browser.test.assertThrows(() => browser.tabs.duplicate('bad'), /'tabId' value is invalid, because a number is expected/i)",
         @"browser.test.assertThrows(() => browser.tabs.remove('bad'), /'tabIDs' value is invalid, because a number or an array of numbers is expected, but a string was provided/i)",
-        @"browser.test.assertThrows(() => browser.tabs.remove(['bad']), /'tabIDs' value is invalid, because a number or an array of numbers is expected, but an array with other values was provided/i)",
+        @"browser.test.assertThrows(() => browser.tabs.remove(['bad']), /'tabIDs' value is invalid, because a number or an array of numbers is expected, but an array of other values was provided/i)",
         @"browser.test.assertThrows(() => browser.tabs.reload('bad'), /an unknown argument was provided/i)",
         @"browser.test.assertThrows(() => browser.tabs.goBack('bad'), /'tabId' value is invalid, because a number is expected/i)",
         @"browser.test.assertThrows(() => browser.tabs.goForward('bad'), /'tabId' value is invalid, because a number is expected/i)",
@@ -126,7 +128,7 @@ TEST(WKWebExtensionAPITabs, Errors)
         @"browser.test.assertThrows(() => browser.tabs.query({ status: 'bad' }), /'status' value is invalid, because it must specify either 'loading' or 'complete'/i)",
 
         @"browser.test.assertThrows(() => browser.tabs.query({ url: 12345 }), /'info' value is invalid, because 'url' is expected to be a string or an array of strings, but a number was provided/i)",
-        @"browser.test.assertThrows(() => browser.tabs.query({ url: ['bad', 12345] }), /'url' is expected to be a string or an array of strings, but an array with other values was provided/i)",
+        @"browser.test.assertThrows(() => browser.tabs.query({ url: ['bad', 12345] }), /'url' is expected to be a string or an array of strings, but an array of other values was provided/i)",
 
         @"browser.test.assertThrows(() => browser.tabs.query({ windowId: 'bad' }), /'windowId' is expected to be a number, but a string was provided/i)",
         @"browser.test.assertThrows(() => browser.tabs.query({ windowId: -5 }), /'windowId' value is invalid, because '-5' is not a window identifier/i)",
@@ -488,12 +490,13 @@ TEST(WKWebExtensionAPITabs, Get)
     [manager loadAndRun];
 }
 
-TEST(WKWebExtensionAPITabs, GetCurrent)
+TEST(WKWebExtensionAPITabs, GetCurrentFromBackgroundPage)
 {
     auto *backgroundScript = Util::constructScript(@[
+        @"const [currentTab] = await browser.tabs.query({ active: true, currentWindow: true })",
         @"const tab = await browser.tabs.getCurrent()",
 
-        @"browser.test.assertEq(tab, undefined, 'The current tab should be undefined in the background page')",
+        @"browser.test.assertDeepEq(tab, currentTab, 'The current tab should be')",
 
         @"browser.test.notifyPass()"
     ]);
@@ -506,6 +509,44 @@ TEST(WKWebExtensionAPITabs, GetCurrent)
     EXPECT_EQ(manager.get().defaultWindow.tabs.count, 2lu);
 
     [manager loadAndRun];
+}
+
+TEST(WKWebExtensionAPITabs, GetCurrentFromOptionsPage)
+{
+    auto *optionsScript = Util::constructScript(@[
+        @"const tab = await browser.tabs.getCurrent()",
+
+        @"browser.test.assertEq(typeof tab, 'object', 'The tab should be')",
+        @"browser.test.assertTrue(tab.active, 'The current tab should be active')",
+
+        @"browser.test.notifyPass()"
+    ]);
+
+    auto *resources = @{
+        @"background.js": @"// Not Used",
+        @"options.html": @"<script type='module' src='options.js'></script>",
+        @"options.js": optionsScript
+    };
+
+    auto extension = adoptNS([[_WKWebExtension alloc] _initWithManifestDictionary:tabsManifest resources:resources]);
+    auto manager = adoptNS([[TestWebExtensionManager alloc] initForExtension:extension.get()]);
+
+    [manager load];
+
+    [manager.get().defaultWindow openNewTab];
+
+    EXPECT_EQ(manager.get().defaultWindow.tabs.count, 2lu);
+
+    auto *optionsPageURL = manager.get().context.optionsPageURL;
+    EXPECT_NOT_NULL(optionsPageURL);
+
+    auto *defaultTab = manager.get().defaultTab;
+    EXPECT_NOT_NULL(defaultTab);
+
+    [defaultTab changeWebViewIfNeededForURL:optionsPageURL forExtensionContext:manager.get().context];
+    [defaultTab.mainWebView loadRequest:[NSURLRequest requestWithURL:optionsPageURL]];
+
+    [manager run];
 }
 
 TEST(WKWebExtensionAPITabs, Query)

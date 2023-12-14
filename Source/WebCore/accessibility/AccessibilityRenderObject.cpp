@@ -1098,48 +1098,63 @@ bool AccessibilityRenderObject::computeAccessibilityIsIgnored() const
     if (!m_renderer)
         return true;
 
-    if (m_renderer->isBR())
+    if (m_renderer->isBR()) {
+#if ENABLE(AX_THREAD_TEXT_APIS)
+        // We need to preserve BRs within editable contexts (e.g. inside contenteditable) for serving
+        // text APIs off the main-thread because this allows them to be part of the AX tree, which is
+        // traversed to compute text markers.
+        auto* node = this->node();
+        return !node || !node->hasEditableStyle();
+#else
         return true;
+#endif
+    }
 
-    if (is<RenderText>(*m_renderer)) {
-        // static text beneath MenuItems and MenuButtons are just reported along with the menu item, so it's ignored on an individual level
-        AXCoreObject* parent = parentObjectUnignored();
-
-        // Walking up the parent chain might reset the m_renderer.
-        if (!m_renderer)
+    if (WeakPtr renderText = dynamicDowncast<RenderText>(m_renderer.get())) {
+        // Text elements with no rendered text, or only whitespace should not be part of the AX tree.
+        if (!renderText->hasRenderedText())
             return true;
 
-        if (parent && (parent->isMenuItem() || parent->isMenuButton()))
+        if (renderText->text().containsOnly<isASCIIWhitespace>()) {
+#if ENABLE(AX_THREAD_TEXT_APIS)
+            // Preserve whitespace-only text within editable contexts because ignoring it would cause
+            // accessibility's representation of text to be different than what is actually rendered.
+            auto* node = this->node();
+            return !node || !node->hasEditableStyle();
+#else
             return true;
-
-        auto& renderText = downcast<RenderText>(*m_renderer);
-        if (!renderText.hasRenderedText())
-            return true;
-
-        if (renderText.parent()->isFirstLetter())
-            return true;
-
-        // static text beneath TextControls is reported along with the text control text so it's ignored.
-        for (AccessibilityObject* parent = parentObject(); parent; parent = parent->parentObject()) { 
-            if (parent->roleValue() == AccessibilityRole::TextField)
-                return true;
+#endif
         }
-        
-        // Walking up the parent chain might reset the m_renderer.
-        if (!m_renderer)
+
+        if (renderText->parent()->isFirstLetter())
             return true;
-        
+
         // The alt attribute may be set on a text fragment through CSS, which should be honored.
-        if (is<RenderTextFragment>(renderText)) {
-            AccessibilityObjectInclusion altTextInclusion = objectInclusionFromAltText(downcast<RenderTextFragment>(renderText).altText());
+        if (auto* renderTextFragment = dynamicDowncast<RenderTextFragment>(renderText.get())) {
+            auto altTextInclusion = objectInclusionFromAltText(renderTextFragment->altText());
             if (altTextInclusion == AccessibilityObjectInclusion::IgnoreObject)
                 return true;
             if (altTextInclusion == AccessibilityObjectInclusion::IncludeObject)
                 return false;
         }
 
-        // text elements that are just empty whitespace should not be returned
-        return renderText.text().containsOnly<isASCIIWhitespace>();
+        bool checkForIgnored = true;
+        for (RefPtr ancestor = parentObject(); ancestor; ancestor = ancestor->parentObject()) {
+            // Static text beneath TextControls is reported along with the text control text so it's ignored.
+            // FIXME: Why does this not check for the other text-control roles (e.g. textarea)?
+            if (ancestor->roleValue() == AccessibilityRole::TextField)
+                return true;
+
+            if (checkForIgnored && !ancestor->accessibilityIsIgnored()) {
+                checkForIgnored = false;
+                // Static text beneath MenuItems and MenuButtons are just reported along with the menu item, so it's ignored on an individual level.
+                if (ancestor->isMenuItem() || ancestor->isMenuButton())
+                    return true;
+            }
+        }
+
+        // If iterating the ancestry has caused m_renderer to be destroyed, ignore `this`.
+        return !renderText;
     }
     
     if (isHeading())
@@ -1368,6 +1383,68 @@ CharacterRange AccessibilityRenderObject::selectedTextRange() const
 
     return documentBasedSelectedTextRange();
 }
+
+#if ENABLE(AX_THREAD_TEXT_APIS)
+Vector<AXTextRun> AccessibilityRenderObject::textRuns()
+{
+    if (auto* renderLineBreak = dynamicDowncast<RenderLineBreak>(renderer())) {
+        auto box = InlineIterator::boxFor(*renderLineBreak);
+        return { { box->lineIndex(), makeString('\n') } };
+    }
+
+    WeakPtr renderText = dynamicDowncast<RenderText>(renderer());
+    if (!renderText)
+        return { };
+
+    // FIXME: Need to handle PseudoId::FirstLetter. Right now, it will be chopped off from the other
+    // other text in the line, and AccessibilityRenderObject::computeAccessibilityIsIgnored ignores the
+    // first-letter RenderText, meaning we can't recover it later by combining text across AX objects.
+
+    Vector<AXTextRun> runs;
+    StringBuilder lineString;
+    // Appends text to the current lineString, collapsing whitespace as necessary (similar to how TextIterator::handleTextRun() does).
+    auto appendToLineString = [&] (const InlineIterator::TextBoxIterator& textBox) {
+        auto text = textBox->originalText();
+        if (text.isEmpty())
+            return;
+        bool collapseTabs = textBox->style().collapseWhiteSpace();
+        bool collapseNewlines = !textBox->style().preserveNewline();
+        if (!collapseTabs && !collapseNewlines) {
+            lineString.append(text);
+            return;
+        }
+
+        lineString.reserveCapacity(lineString.length() + text.length());
+        for (unsigned i = 0; i < text.length(); i++) {
+            UChar character = text[i];
+            if (character == '\t' && collapseTabs)
+                lineString.append(' ');
+            else if (character == '\n' && collapseNewlines)
+                lineString.append(' ');
+            else
+                lineString.append(character);
+        }
+    };
+
+    auto textBox = InlineIterator::firstTextBoxFor(*renderText);
+    size_t currentLineIndex = textBox ? textBox->lineIndex() : 0;
+    for (; textBox; textBox.traverseNextTextBox()) {
+        size_t newLineIndex = textBox->lineIndex();
+        if (newLineIndex != currentLineIndex) {
+            // FIXME: Currently, this is only ever called to ship text runs off to the accessibility thread. But maybe we should we make the isolatedCopy()s in this function optional based on a parameter?
+            runs.append({ currentLineIndex, lineString.toString().isolatedCopy() });
+            lineString.clear();
+        }
+        currentLineIndex = newLineIndex;
+
+        appendToLineString(textBox);
+    }
+
+    if (!lineString.isEmpty())
+        runs.append({ currentLineIndex, lineString.toString().isolatedCopy() });
+    return runs;
+}
+#endif // ENABLE(AX_THREAD_TEXT_APIS)
 
 int AccessibilityRenderObject::insertionPointLineNumber() const
 {
@@ -2027,6 +2104,10 @@ AccessibilityRole AccessibilityRenderObject::determineAccessibilityRole()
         return AccessibilityRole::ListMarker;
     if (m_renderer->isRenderText())
         return AccessibilityRole::StaticText;
+#if ENABLE(AX_THREAD_TEXT_APIS)
+    if (m_renderer->isBR())
+        return AccessibilityRole::LineBreak;
+#endif
     if (is<HTMLImageElement>(node) && downcast<HTMLImageElement>(*node).hasAttributeWithoutSynchronization(usemapAttr))
         return AccessibilityRole::ImageMap;
     if (m_renderer->isImage()) {

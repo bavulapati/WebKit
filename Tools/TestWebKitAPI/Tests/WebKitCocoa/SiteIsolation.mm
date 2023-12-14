@@ -329,7 +329,7 @@ struct WebViewAndDelegates {
     RetainPtr<TestUIDelegate> uiDelegate;
 };
 
-static std::pair<WebViewAndDelegates, WebViewAndDelegates> openerAndOpenedViews(const HTTPServer& server)
+static std::pair<WebViewAndDelegates, WebViewAndDelegates> openerAndOpenedViews(const HTTPServer& server, NSString *url = @"https://example.com/example")
 {
     __block WebViewAndDelegates opener;
     __block WebViewAndDelegates opened;
@@ -352,7 +352,7 @@ static std::pair<WebViewAndDelegates, WebViewAndDelegates> openerAndOpenedViews(
     };
     [opener.webView setUIDelegate:opener.uiDelegate.get()];
     opener.webView.get().configuration.preferences.javaScriptCanOpenWindowsAutomatically = YES;
-    [opener.webView loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:@"https://example.com/example"]]];
+    [opener.webView loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:url]]];
     while (!opened.webView)
         Util::spinRunLoop();
     [opened.navigationDelegate waitForDidFinishNavigation];
@@ -380,6 +380,34 @@ TEST(SiteIsolation, NavigationAfterWindowOpen)
 
     while (processStillRunning(webKitPid))
         Util::spinRunLoop();
+}
+
+TEST(SiteIsolation, WindowOpenRedirect)
+{
+    HTTPServer server({
+        { "/example1"_s, { "<script>w = window.open('https://webkit.org/webkit1')</script>"_s } },
+        { "/webkit1"_s, { 302, { { "Location"_s, "/webkit2"_s } }, "redirecting..."_s } },
+        { "/webkit2"_s, { "loaded!"_s } },
+        { "/example2"_s, { "<script>w = window.open('https://webkit.org/webkit3')</script>"_s } },
+        { "/webkit3"_s, { 302, { { "Location"_s, "https://example.com/example3"_s } }, "redirecting..."_s } },
+        { "/example3"_s, { "loaded!"_s } },
+        { "/example4"_s, { "<script>w = window.open('https://webkit.org/webkit4')</script>"_s } },
+        { "/webkit4"_s, { 302, { { "Location"_s, "https://apple.com/apple"_s } }, "redirecting..."_s } },
+        { "/apple"_s, { "loaded!"_s } },
+    }, HTTPServer::Protocol::HttpsProxy);
+
+    {
+        auto [opener, opened] = openerAndOpenedViews(server, @"https://example.com/example1");
+        EXPECT_WK_STREQ(opened.webView.get().URL.absoluteString, "https://webkit.org/webkit2");
+    }
+    {
+        auto [opener, opened] = openerAndOpenedViews(server, @"https://example.com/example2");
+        EXPECT_WK_STREQ(opened.webView.get().URL.absoluteString, "https://example.com/example3");
+    }
+    {
+        auto [opener, opened] = openerAndOpenedViews(server, @"https://example.com/example4");
+        EXPECT_WK_STREQ(opened.webView.get().URL.absoluteString, "https://apple.com/apple");
+    }
 }
 
 TEST(SiteIsolation, CloseAfterWindowOpen)
@@ -1146,13 +1174,25 @@ TEST(SiteIsolation, NavigationWithIFrames)
 
     [webView loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:@"https://domain1.com/1"]]];
     [navigationDelegate waitForDidFinishNavigation];
+    checkFrameTreesInProcesses(webView.get(), {
+        { "https://domain1.com"_s, { { RemoteFrame } } },
+        { RemoteFrame, { { "https://domain2.com"_s } } }
+    });
 
     [webView loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:@"https://domain3.com/3"]]];
     [navigationDelegate waitForDidFinishNavigation];
+    checkFrameTreesInProcesses(webView.get(), {
+        { "https://domain3.com"_s, { { RemoteFrame, { { RemoteFrame } } } } },
+        { RemoteFrame, { { "https://domain4.com"_s, { { RemoteFrame } } } } },
+        { RemoteFrame, { { RemoteFrame, { { "https://domain5.com"_s } } } } }
+    });
 
     [webView goBack];
     [navigationDelegate waitForDidFinishNavigation];
-    // FIXME: Implement CachedFrame for RemoteFrames and verify the page is resumed correctly.
+    checkFrameTreesInProcesses(webView.get(), {
+        { "https://domain1.com"_s, { { RemoteFrame } } },
+        { RemoteFrame, { { "https://domain2.com"_s } } }
+    });
 }
 
 TEST(SiteIsolation, RemoveFrames)
@@ -1608,6 +1648,65 @@ TEST(SiteIsolation, FocusOpenedWindow)
         getUpdatedFrameInfo(opener.webView.get(), opened.webView.get());
     } while (![openedInfo _isFocused]);
     EXPECT_FALSE([openerInfo _isFocused]);
+}
+
+TEST(SiteIsolation, FindStringInFrame)
+{
+    HTTPServer server({
+        { "/mainframe"_s, { "<iframe src='https://domain2.com/subframe'></iframe>"_s } },
+        { "/subframe"_s, { "<p>Hello world</p>"_s } }
+    }, HTTPServer::Protocol::HttpsProxy);
+    auto [webView, navigationDelegate] = siteIsolatedViewAndDelegate(server);
+
+    [webView loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:@"https://domain1.com/mainframe"]]];
+    [navigationDelegate waitForDidFinishNavigation];
+
+    auto findConfiguration = adoptNS([[WKFindConfiguration alloc] init]);
+
+    __block bool done = false;
+    [webView findString:@"Hello world" withConfiguration:findConfiguration.get() completionHandler:^(WKFindResult *result) {
+        EXPECT_TRUE(result.matchFound);
+        done = true;
+    }];
+    TestWebKitAPI::Util::run(&done);
+    done = false;
+
+    [webView findString:@"Missing string" withConfiguration:findConfiguration.get() completionHandler:^(WKFindResult *result) {
+        EXPECT_FALSE(result.matchFound);
+        done = true;
+    }];
+    TestWebKitAPI::Util::run(&done);
+    done = false;
+}
+
+TEST(SiteIsolation, FindStringInNestedFrame)
+{
+    HTTPServer server({
+        { "/mainframe"_s, { "<iframe src='https://domain2.com/subframe'></iframe>"_s } },
+        { "/subframe"_s, { "<iframe src='https://domain3.com/nested_subframe'></iframe>"_s } },
+        { "/nested_subframe"_s, { "<p>Hello world</p>"_s } }
+    }, HTTPServer::Protocol::HttpsProxy);
+    auto [webView, navigationDelegate] = siteIsolatedViewAndDelegate(server);
+
+    [webView loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:@"https://domain1.com/mainframe"]]];
+    [navigationDelegate waitForDidFinishNavigation];
+
+    auto findConfiguration = adoptNS([[WKFindConfiguration alloc] init]);
+
+    __block bool done = false;
+    [webView findString:@"Hello world" withConfiguration:findConfiguration.get() completionHandler:^(WKFindResult *result) {
+        EXPECT_TRUE(result.matchFound);
+        done = true;
+    }];
+    TestWebKitAPI::Util::run(&done);
+    done = false;
+
+    [webView findString:@"Missing string" withConfiguration:findConfiguration.get() completionHandler:^(WKFindResult *result) {
+        EXPECT_FALSE(result.matchFound);
+        done = true;
+    }];
+    TestWebKitAPI::Util::run(&done);
+    done = false;
 }
 
 }

@@ -35,6 +35,7 @@
 #include <wtf/Function.h>
 #include <wtf/Lock.h>
 #include <wtf/LoggerHelper.h>
+#include <wtf/RefCounted.h>
 #include <wtf/ThreadSafeWeakPtr.h>
 
 namespace WebCore {
@@ -43,12 +44,20 @@ class InbandMetadataTextTrackPrivateAVF;
 class InbandTextTrackPrivateAVF;
 
 // Use eager initialization for the WeakPtrFactory since we construct WeakPtrs on another thread.
-class MediaPlayerPrivateAVFoundation : public CanMakeWeakPtr<MediaPlayerPrivateAVFoundation, WeakPtrFactoryInitialization::Eager>, public MediaPlayerPrivateInterface, public AVFInbandTrackParent
+class MediaPlayerPrivateAVFoundation
+    : public ThreadSafeRefCountedAndCanMakeThreadSafeWeakPtr<MediaPlayerPrivateAVFoundation>
+    , public MediaPlayerPrivateInterface
+    , public AVFInbandTrackParent
 #if !RELEASE_LOG_DISABLED
     , private LoggerHelper
 #endif
 {
 public:
+    virtual ~MediaPlayerPrivateAVFoundation();
+
+    void ref() final { ThreadSafeRefCountedAndCanMakeThreadSafeWeakPtr::ref(); }
+    void deref() final { ThreadSafeRefCountedAndCanMakeThreadSafeWeakPtr::deref(); }
+
     virtual void metadataLoaded();
     virtual void playabilityKnown();
     virtual void rateChanged();
@@ -155,7 +164,6 @@ public:
 
 protected:
     explicit MediaPlayerPrivateAVFoundation(MediaPlayer*);
-    virtual ~MediaPlayerPrivateAVFoundation();
 
     // MediaPlayerPrivatePrivateInterface overrides.
     void load(const String& url) override;
@@ -325,7 +333,7 @@ protected:
 
     bool shouldEnableInheritURIQueryComponent() const;
 
-private:
+protected:
     ThreadSafeWeakPtr<MediaPlayer> m_player;
 
     Function<void()> m_pendingSeek;
@@ -354,7 +362,6 @@ private:
     mutable MediaTime m_cachedMaxTimeSeekable;
     mutable MediaTime m_cachedMinTimeSeekable;
     mutable MediaTime m_cachedDuration;
-    MediaTime m_reportedDuration;
     mutable MediaTime m_maxTimeLoadedAtLastDidLoadingProgress;
     int m_delayCharacteristicsChangedNotification;
     bool m_mainThreadCallPending;
@@ -381,15 +388,6 @@ namespace WTF {
 
 template<typename Type>
 struct LogArgument;
-
-template<> struct EnumTraits<WebCore::MediaPlayerPrivateAVFoundation::MediaRenderingMode> {
-using values = EnumValues<
-    WebCore::MediaPlayerPrivateAVFoundation::MediaRenderingMode,
-    WebCore::MediaPlayerPrivateAVFoundation::MediaRenderingMode::MediaRenderingNone,
-    WebCore::MediaPlayerPrivateAVFoundation::MediaRenderingMode::MediaRenderingToContext,
-    WebCore::MediaPlayerPrivateAVFoundation::MediaRenderingMode::MediaRenderingToLayer
-    >;
-};
 
 }; // namespace WTF
 

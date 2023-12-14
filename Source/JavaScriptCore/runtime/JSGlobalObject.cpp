@@ -522,6 +522,8 @@ static String asSignpostString(JSGlobalObject* globalObject, JSValue v)
     return v.toWTFString(globalObject);
 }
 
+std::atomic<unsigned> activeJSGlobalObjectSignpostIntervalCount { 0 };
+
 JSC_DEFINE_HOST_FUNCTION(signpostStart, (JSGlobalObject* globalObject, CallFrame* callFrame))
 {
     VM& vm = globalObject->vm();
@@ -530,6 +532,7 @@ JSC_DEFINE_HOST_FUNCTION(signpostStart, (JSGlobalObject* globalObject, CallFrame
     auto message = asSignpostString(globalObject, callFrame->argument(0));
     RETURN_IF_EXCEPTION(scope, EncodedJSValue());
 
+    ++activeJSGlobalObjectSignpostIntervalCount;
     os_signpost_interval_begin(WTFSignpostLogHandle(), os_signpost_id_make_with_pointer(WTFSignpostLogHandle(), globalObject), "JSGlobalObject signpost", "%" PUBLIC_LOG_STRING, message.ascii().data());
 
     return JSValue::encode(jsUndefined());
@@ -544,6 +547,7 @@ JSC_DEFINE_HOST_FUNCTION(signpostStop, (JSGlobalObject* globalObject, CallFrame*
     RETURN_IF_EXCEPTION(scope, EncodedJSValue());
 
     os_signpost_interval_end(WTFSignpostLogHandle(), os_signpost_id_make_with_pointer(WTFSignpostLogHandle(), globalObject), "JSGlobalObject signpost", "%" PUBLIC_LOG_STRING, message.ascii().data());
+    --activeJSGlobalObjectSignpostIntervalCount;
 
     return JSValue::encode(jsUndefined());
 }
@@ -2947,6 +2951,89 @@ void JSGlobalObject::installSetPrototypeWatchpoint(SetPrototype* setPrototype)
     ObjectPropertyCondition condition = setupAdaptiveWatchpoint(this, setPrototype, vm.propertyNames->add);
     m_setPrototypeAddWatchpoint = makeUnique<ObjectPropertyChangeAdaptiveWatchpoint<InlineWatchpointSet>>(this, condition, m_setAddWatchpointSet);
     m_setPrototypeAddWatchpoint->install(vm);
+}
+
+void JSGlobalObject::tryInstallPropertyDescriptorFastPathWatchpoint()
+{
+    VM& vm = this->vm();
+
+    DeferTerminationForAWhile deferScope(vm);
+    auto catchScope = DECLARE_CATCH_SCOPE(vm);
+
+    auto invalidate = [&]() {
+        m_propertyDescriptorFastPathWatchpointSet.invalidate(vm, StringFireDetail("Was not able to set up property descriptor related names watchpoint set."));
+    };
+
+    auto absenceCondition = [&](JSObject* base, PropertyName propertyName) -> std::optional<ObjectPropertyCondition> {
+        PropertySlot slot(base, PropertySlot::InternalMethodType::VMInquiry, &vm);
+        bool result = base->getOwnPropertySlot(base, this, propertyName, slot);
+        if (result)
+            return std::nullopt;
+        catchScope.assertNoException();
+        RELEASE_ASSERT(slot.isUnset());
+        return ObjectPropertyCondition::absence(vm, this, base, propertyName.uid(), nullptr);
+    };
+
+    if (!objectPrototypeChainIsSane()) {
+        invalidate();
+        return;
+    }
+
+    Vector<ObjectPropertyCondition, 8> conditions;
+    {
+        auto condition = absenceCondition(objectPrototype(), vm.propertyNames->get);
+        if (!condition) {
+            invalidate();
+            return;
+        }
+        conditions.append(condition.value());
+    }
+    {
+        auto condition = absenceCondition(objectPrototype(), vm.propertyNames->set);
+        if (!condition) {
+            invalidate();
+            return;
+        }
+        conditions.append(condition.value());
+    }
+    {
+        auto condition = absenceCondition(objectPrototype(), vm.propertyNames->enumerable);
+        if (!condition) {
+            invalidate();
+            return;
+        }
+        conditions.append(condition.value());
+    }
+    {
+        auto condition = absenceCondition(objectPrototype(), vm.propertyNames->configurable);
+        if (!condition) {
+            invalidate();
+            return;
+        }
+        conditions.append(condition.value());
+    }
+    {
+        auto condition = absenceCondition(objectPrototype(), vm.propertyNames->writable);
+        if (!condition) {
+            invalidate();
+            return;
+        }
+        conditions.append(condition.value());
+    }
+
+    for (auto& condition : conditions) {
+        if (!condition.isWatchable(PropertyCondition::EnsureWatchability)) {
+            invalidate();
+            return;
+        }
+    }
+
+    RELEASE_ASSERT(!m_propertyDescriptorFastPathWatchpointSet.isBeingWatched());
+    m_propertyDescriptorFastPathWatchpointSet.touch(vm, "Set up property descriptor fast path watchpoint set.");
+    for (auto& condition : conditions) {
+        m_missWatchpoints.append(makeUnique<ObjectAdaptiveStructureWatchpoint>(this, condition, m_propertyDescriptorFastPathWatchpointSet));
+        m_missWatchpoints.last()->install(vm);
+    }
 }
 
 void slowValidateCell(JSGlobalObject* globalObject)

@@ -175,6 +175,7 @@ const TestFeatures& TestOptions::defaults()
             { "isAppInitiated", true },
             { "advancedPrivacyProtectionsEnabled", false },
             { "runSingly", false },
+            { "runInCrossOriginIFrame", false },
             { "shouldHandleRunOpenPanel", true },
             { "shouldPresentPopovers", true },
             { "shouldShowTouches", false },
@@ -189,6 +190,7 @@ const TestFeatures& TestOptions::defaults()
             { "noUseRemoteLayerTree", false },
             { "useThreadedScrolling", false },
             { "suppressInputAccessoryView", false },
+            { "allowsInlinePredictions", false },
             { "showsScrollIndicators", true },
             { "enhancedWindowingEnabled", false },
         };
@@ -239,6 +241,7 @@ const std::unordered_map<std::string, TestHeaderKeyType>& TestOptions::keyTypeMa
         { "isAppInitiated", TestHeaderKeyType::BoolTestRunner },
         { "advancedPrivacyProtectionsEnabled", TestHeaderKeyType::BoolTestRunner },
         { "runSingly", TestHeaderKeyType::BoolTestRunner },
+        { "runInCrossOriginIFrame", TestHeaderKeyType::BoolTestRunner },
         { "shouldHandleRunOpenPanel", TestHeaderKeyType::BoolTestRunner },
         { "shouldPresentPopovers", TestHeaderKeyType::BoolTestRunner },
         { "shouldShowTouches", TestHeaderKeyType::BoolTestRunner },
@@ -252,6 +255,7 @@ const std::unordered_map<std::string, TestHeaderKeyType>& TestOptions::keyTypeMa
         { "useRemoteLayerTree", TestHeaderKeyType::BoolTestRunner },
         { "useThreadedScrolling", TestHeaderKeyType::BoolTestRunner },
         { "suppressInputAccessoryView", TestHeaderKeyType::BoolTestRunner },
+        { "allowsInlinePredictions", TestHeaderKeyType::BoolTestRunner },
         { "showsScrollIndicators", TestHeaderKeyType::BoolTestRunner },
         { "enhancedWindowingEnabled", TestHeaderKeyType::BoolTestRunner },
     

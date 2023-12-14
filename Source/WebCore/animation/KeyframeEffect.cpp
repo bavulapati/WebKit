@@ -91,7 +91,7 @@ KeyframeEffect::ParsedKeyframe::~ParsedKeyframe() = default;
 static inline void invalidateElement(const std::optional<const Styleable>& styleable)
 {
     if (styleable)
-        styleable->element.invalidateStyleInternal();
+        styleable->element.invalidateStyleForAnimation();
 }
 
 String KeyframeEffect::CSSPropertyIDToIDLAttributeName(CSSPropertyID property)
@@ -556,9 +556,7 @@ ExceptionOr<Ref<KeyframeEffect>> KeyframeEffect::create(JSGlobalObject& lexicalG
             };
 
             keyframeEffect->setComposite(keyframeEffectOptions.composite);
-
-            if (document.settings().webAnimationsIterationCompositeEnabled())
-                keyframeEffect->setIterationComposite(keyframeEffectOptions.iterationComposite);
+            keyframeEffect->setIterationComposite(keyframeEffectOptions.iterationComposite);
         }
         auto updateTimingResult = keyframeEffect->updateTiming(timing);
         if (updateTimingResult.hasException())
@@ -786,8 +784,14 @@ ExceptionOr<void> KeyframeEffect::setBindingsKeyframes(JSGlobalObject& lexicalGl
 ExceptionOr<void> KeyframeEffect::setKeyframes(JSGlobalObject& lexicalGlobalObject, Document& document, Strong<JSObject>&& keyframesInput)
 {
     auto processKeyframesResult = processKeyframes(lexicalGlobalObject, document, WTFMove(keyframesInput));
-    if (!processKeyframesResult.hasException() && animation())
+    if (!processKeyframesResult.hasException() && animation()) {
         animation()->effectTimingDidChange();
+
+        // Need a full style invalidation since the new keyframes may interact differently with the base style.
+        if (auto target = targetStyleable())
+            target->element.invalidateStyleInternal();
+    }
+
     return processKeyframesResult;
 }
 
@@ -1006,6 +1010,7 @@ void KeyframeEffect::setBlendingKeyframes(KeyframeList&& blendingKeyframes)
     computeHasExplicitlyInheritedKeyframeProperty();
     computeHasAcceleratedPropertyOverriddenByCascadeProperty();
     computeHasReferenceFilter();
+    computeHasSizeDependentTransform();
 
     checkForMatchingTransformFunctionLists();
 
@@ -1155,11 +1160,9 @@ void KeyframeEffect::animationTimelineDidChange(AnimationTimeline* timeline)
 #endif
 
     if (timeline)
-        m_inTargetEffectStack = target->ensureKeyframeEffectStack().addEffect(*this);
-    else {
+        target->ensureKeyframeEffectStack().addEffect(*this);
+    else
         target->ensureKeyframeEffectStack().removeEffect(*this);
-        m_inTargetEffectStack = false;
-    }
 }
 
 void KeyframeEffect::animationTimingDidChange()
@@ -1187,11 +1190,9 @@ void KeyframeEffect::updateEffectStackMembership()
 
     bool isRelevant = animation() && animation()->isRelevant();
     if (isRelevant && !m_inTargetEffectStack)
-        m_inTargetEffectStack = target->ensureKeyframeEffectStack().addEffect(*this);
-    else if (!isRelevant && m_inTargetEffectStack) {
+        target->ensureKeyframeEffectStack().addEffect(*this);
+    else if (!isRelevant && m_inTargetEffectStack)
         target->ensureKeyframeEffectStack().removeEffect(*this);
-        m_inTargetEffectStack = false;
-    }
 }
 
 void KeyframeEffect::setAnimation(WebAnimation* animation)
@@ -1280,13 +1281,11 @@ void KeyframeEffect::didChangeTargetStyleable(const std::optional<const Styleabl
     StackMembershipMutationScope stackMembershipMutationScope(this);
 #endif
 
-    if (previousTargetStyleable) {
+    if (previousTargetStyleable)
         previousTargetStyleable->ensureKeyframeEffectStack().removeEffect(*this);
-        m_inTargetEffectStack = false;
-    }
 
     if (newTargetStyleable)
-        m_inTargetEffectStack = newTargetStyleable->ensureKeyframeEffectStack().addEffect(*this);
+        newTargetStyleable->ensureKeyframeEffectStack().addEffect(*this);
 }
 
 void KeyframeEffect::apply(RenderStyle& targetStyle, const Style::ResolutionContext& resolutionContext, std::optional<Seconds> startTime)
@@ -1621,6 +1620,9 @@ bool KeyframeEffect::canBeAccelerated() const
     if (m_hasKeyframeComposingAcceleratedProperty)
         return false;
 
+    if (m_animatesSizeAndSizeDependentTransform)
+        return false;
+
     return true;
 }
 
@@ -1857,8 +1859,19 @@ void KeyframeEffect::animationWasCanceled()
         addPendingAcceleratedAction(AcceleratedAction::Stop);
 }
 
-void KeyframeEffect::wasRemovedFromStack()
+void KeyframeEffect::wasAddedToEffectStack()
 {
+    m_inTargetEffectStack = true;
+    invalidate();
+}
+
+void KeyframeEffect::wasRemovedFromEffectStack()
+{
+    m_inTargetEffectStack = false;
+
+    if (!canBeAccelerated())
+        return;
+
 #if ENABLE(THREADED_ANIMATION_RESOLUTION)
     if (threadedAnimationResolutionEnabled())
         return;
@@ -1956,6 +1969,10 @@ void KeyframeEffect::applyPendingAcceleratedActions()
         ASSERT(m_target);
         auto* effectStack = m_target->keyframeEffectStack(m_pseudoId);
         ASSERT(effectStack);
+
+        if ((m_hasWidthDependentTransform && effectStack->containsProperty(CSSPropertyWidth))
+            || (m_hasHeightDependentTransform && effectStack->containsProperty(CSSPropertyHeight)))
+            return RunningAccelerated::Prevented;
 
         if (!effectStack->allowsAcceleration())
             return RunningAccelerated::Prevented;
@@ -2281,10 +2298,14 @@ std::optional<double> KeyframeEffect::progressUntilNextStep(double iterationProg
     return std::nullopt;
 }
 
-bool KeyframeEffect::ticksContinouslyWhileActive() const
+bool KeyframeEffect::ticksContinuouslyWhileActive() const
 {
     auto doesNotAffectStyles = m_blendingKeyframes.isEmpty() || m_blendingKeyframes.properties().isEmpty();
     if (doesNotAffectStyles)
+        return false;
+
+    auto targetHasDisplayContents = [&]() { return m_target && m_pseudoId == PseudoId::None && m_target->hasDisplayContents(); };
+    if (!renderer() && !targetHasDisplayContents())
         return false;
 
     if (isCompletelyAccelerated() && isRunningAccelerated())
@@ -2295,13 +2316,17 @@ bool KeyframeEffect::ticksContinouslyWhileActive() const
 
 Seconds KeyframeEffect::timeToNextTick(const BasicEffectTiming& timing) const
 {
-    if (timing.phase == AnimationEffectPhase::Active) {
-        // CSS Animations need to trigger "animationiteration" events even if there is no need to
-        // update styles while animating, so if we're dealing with one we must wait until the next iteration.
-        if (!ticksContinouslyWhileActive() && is<CSSAnimation>(animation())) {
-            if (auto iterationProgress = getComputedTiming().simpleIterationProgress)
-                return iterationDuration() * (1 - *iterationProgress);
-        }
+    // CSS Animations need to trigger "animationiteration" events even if there is no need to
+    // update styles while animating, so if we're dealing with one we must wait until the next iteration.
+    // We only do this in case any CSS Animation event was registered since, in the general case, there's
+    // a good chance that no such event listeners were registered and we can avoid some unnecessary
+    // animation resolution scheduling.
+    ASSERT(document());
+    if (timing.phase == AnimationEffectPhase::Active && is<CSSAnimation>(animation())
+        && document()->hasListenerType(Document::ListenerType::CSSAnimation)
+        && !ticksContinuouslyWhileActive()) {
+        if (auto iterationProgress = getComputedTiming().simpleIterationProgress)
+            return iterationDuration() * (1 - *iterationProgress);
     }
 
     return AnimationEffect::timeToNextTick(timing);
@@ -2496,10 +2521,8 @@ void KeyframeEffect::computeHasReferenceFilter()
         auto animatesFilterProperty = [&]() {
             if (m_blendingKeyframes.containsProperty(CSSPropertyFilter))
                 return true;
-#if ENABLE(FILTERS_LEVEL_2)
             if (m_blendingKeyframes.containsProperty(CSSPropertyWebkitBackdropFilter) || m_blendingKeyframes.containsProperty(CSSPropertyBackdropFilter))
                 return true;
-#endif
             return false;
         }();
 
@@ -2509,10 +2532,8 @@ void KeyframeEffect::computeHasReferenceFilter()
         auto styleContainsFilter = [](const RenderStyle& style) {
             if (style.filter().hasReferenceFilter())
                 return true;
-#if ENABLE(FILTERS_LEVEL_2)
             if (style.backdropFilter().hasReferenceFilter())
                 return true;
-#endif
             return false;
         };
 
@@ -2532,6 +2553,50 @@ void KeyframeEffect::computeHasReferenceFilter()
 
         return false;
     }();
+}
+
+void KeyframeEffect::computeHasSizeDependentTransform()
+{
+    m_hasWidthDependentTransform = false;
+    m_hasHeightDependentTransform = false;
+    m_animatesSizeAndSizeDependentTransform = false;
+
+    if (m_blendingKeyframes.isEmpty())
+        return;
+
+    auto animatesTransform = m_blendingKeyframes.containsProperty(CSSPropertyTransform);
+    auto animatesTranslate = m_blendingKeyframes.containsProperty(CSSPropertyTranslate);
+
+    if (!animatesTransform && !animatesTranslate)
+        return;
+
+    for (auto& keyframe : m_blendingKeyframes) {
+        if (auto* style = keyframe.style()) {
+            if (animatesTranslate) {
+                if (auto* translate = style->translate()) {
+                    if (translate->x().isPercent())
+                        m_hasWidthDependentTransform = true;
+                    if (translate->y().isPercent())
+                        m_hasHeightDependentTransform = true;
+                }
+            }
+            if (animatesTransform) {
+                for (auto& operation : style->transform().operations()) {
+                    if (auto* translate = dynamicDowncast<TranslateTransformOperation>(operation.get())) {
+                        if (translate->x().isPercent())
+                            m_hasWidthDependentTransform = true;
+                        if (translate->y().isPercent())
+                            m_hasHeightDependentTransform = true;
+                    }
+                }
+            }
+        }
+        if (m_hasWidthDependentTransform && m_hasHeightDependentTransform)
+            break;
+    }
+
+    m_animatesSizeAndSizeDependentTransform = (m_hasWidthDependentTransform && m_blendingKeyframes.containsProperty(CSSPropertyWidth))
+        || (m_hasHeightDependentTransform && m_blendingKeyframes.containsProperty(CSSPropertyHeight));
 }
 
 void KeyframeEffect::effectStackNoLongerPreventsAcceleration()
@@ -2629,11 +2694,9 @@ static bool acceleratedPropertyDidChange(AnimatableCSSProperty property, const R
         return previousStyle.offsetRotate() != currentStyle.offsetRotate();
     case CSSPropertyFilter:
         return previousStyle.filter() != currentStyle.filter();
-#if ENABLE(FILTERS_LEVEL_2)
     case CSSPropertyBackdropFilter:
     case CSSPropertyWebkitBackdropFilter:
         return previousStyle.backdropFilter() != currentStyle.backdropFilter();
-#endif
     default:
         ASSERT_NOT_REACHED();
         break;

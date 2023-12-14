@@ -46,11 +46,17 @@ struct WebExtensionTabQueryParameters;
 struct WebExtensionWindowParameters;
 
 enum class WebExtensionWindowTypeFilter : uint8_t {
-    None   = 0,
     Normal = 1 << 0,
     Popup  = 1 << 1,
-    All    = Normal | Popup,
 };
+
+static constexpr OptionSet<WebExtensionWindowTypeFilter> allWebExtensionWindowTypeFilters()
+{
+    return {
+        WebExtensionWindowTypeFilter::Normal,
+        WebExtensionWindowTypeFilter::Popup
+    };
+}
 
 class WebExtensionWindow : public RefCounted<WebExtensionWindow>, public CanMakeWeakPtr<WebExtensionWindow> {
     WTF_MAKE_NONCOPYABLE(WebExtensionWindow);
@@ -153,5 +159,17 @@ _WKWebExtensionWindowState toAPI(WebExtensionWindow::State);
 #endif
 
 } // namespace WebKit
+
+namespace WTF {
+
+template<> struct EnumTraits<WebKit::WebExtensionWindowTypeFilter> {
+    using values = EnumValues<
+        WebKit::WebExtensionWindowTypeFilter,
+        WebKit::WebExtensionWindowTypeFilter::Normal,
+        WebKit::WebExtensionWindowTypeFilter::Popup
+    >;
+};
+
+} // namespace WTF
 
 #endif // ENABLE(WK_WEB_EXTENSIONS)

@@ -11426,7 +11426,10 @@ IGNORE_CLANG_WARNINGS_END
                     
                     auto* callLinkInfo = state->addCallLinkInfo(semanticNodeOrigin);
                     callLinkInfo->setUpCall(CallLinkInfo::DirectTailCall, InvalidGPRReg);
-                    
+                    callLinkInfo->setExecutableDuringCompilation(executable);
+                    if (numAllocatedArgs > numPassedArgs)
+                        callLinkInfo->setDirectCallMaxArgumentCountIncludingThis(numAllocatedArgs);
+
                     CCallHelpers::Label mainPath = jit.label();
                     jit.store32(
                         CCallHelpers::TrustedImm32(callSiteIndex.bits()),
@@ -11444,10 +11447,7 @@ IGNORE_CLANG_WARNINGS_END
                         semanticNodeOrigin, exceptions.get(), operationLinkDirectCall,
                         InvalidGPRReg, CCallHelpers::TrustedImmPtr(callLinkInfo), calleeGPR).call();
                     jit.jump().linkTo(mainPath, &jit);
-                    callLinkInfo->setExecutableDuringCompilation(executable);
-                    if (numAllocatedArgs > numPassedArgs)
-                        callLinkInfo->setDirectCallMaxArgumentCountIncludingThis(numAllocatedArgs);
-                    
+
                     jit.addLinkTask([=] (LinkBuffer& linkBuffer) {
                         callLinkInfo->setCodeLocations(
                             linkBuffer.locationOf<JSInternalPtrTag>(slowPath),
@@ -11460,6 +11460,10 @@ IGNORE_CLANG_WARNINGS_END
                 callLinkInfo->setUpCall(
                     isConstruct ? CallLinkInfo::DirectConstruct : CallLinkInfo::DirectCall, InvalidGPRReg);
 
+                callLinkInfo->setExecutableDuringCompilation(executable);
+                if (numAllocatedArgs > numPassedArgs)
+                    callLinkInfo->setDirectCallMaxArgumentCountIncludingThis(numAllocatedArgs);
+
                 CCallHelpers::Label mainPath = jit.label();
                 jit.store32(
                     CCallHelpers::TrustedImm32(callSiteIndex.bits()),
@@ -11468,10 +11472,6 @@ IGNORE_CLANG_WARNINGS_END
                 jit.addPtr(
                     CCallHelpers::TrustedImm32(-params.proc().frameSize()),
                     GPRInfo::callFrameRegister, CCallHelpers::stackPointerRegister);
-                
-                callLinkInfo->setExecutableDuringCompilation(executable);
-                if (numAllocatedArgs > numPassedArgs)
-                    callLinkInfo->setDirectCallMaxArgumentCountIncludingThis(numAllocatedArgs);
                 
                 params.addLatePath(
                     [=] (CCallHelpers& jit) {
@@ -20319,22 +20319,16 @@ IGNORE_CLANG_WARNINGS_END
                         patchableJump.m_jump.link(&jit);
                         unsigned index = state->jitCode->lazySlowPaths.size();
                         state->jitCode->lazySlowPaths.append(nullptr);
-                        jit.pushToSaveImmediateWithoutTouchingRegisters(
-                            CCallHelpers::TrustedImm32(index));
-                        CCallHelpers::Jump generatorJump = jit.jump();
+                        jit.pushToSaveImmediateWithoutTouchingRegisters(CCallHelpers::TrustedImm32(index));
+                        jit.jumpThunk(CodeLocationLabel<JITThunkPtrTag>(state->graph.m_vm.getCTIStub(lazySlowPathGenerationThunkGenerator).code()));
 
                         // Note that so long as we're here, we don't really know if our late path
                         // runs before or after any other late paths that we might depend on, like
                         // the exception thunk.
 
                         RefPtr<JITCode> jitCode = state->jitCode;
-                        VM* vm = &state->graph.m_vm;
-
                         jit.addLinkTask(
                             [=] (LinkBuffer& linkBuffer) {
-                                linkBuffer.link(generatorJump,
-                                    CodeLocationLabel<JITThunkPtrTag>(vm->getCTIStub(lazySlowPathGenerationThunkGenerator).code()));
-                                
                                 std::unique_ptr<LazySlowPath> lazySlowPath = makeUnique<LazySlowPath>();
 
                                 auto linkedPatchableJump = CodeLocationJump<JSInternalPtrTag>(linkBuffer.locationOf<JSInternalPtrTag>(patchableJump));

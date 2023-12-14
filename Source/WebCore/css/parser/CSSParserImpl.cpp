@@ -42,6 +42,7 @@
 #include "CSSParserObserverWrapper.h"
 #include "CSSParserSelector.h"
 #include "CSSPropertyParser.h"
+#include "CSSSelectorList.h"
 #include "CSSSelectorParser.h"
 #include "CSSStyleSheet.h"
 #include "CSSSupportsParser.h"
@@ -60,6 +61,7 @@
 #include "StyleRule.h"
 #include "StyleRuleImport.h"
 #include "StyleSheetContents.h"
+#include "css/parser/CSSParserEnum.h"
 #include <bitset>
 #include <memory>
 #include <optional>
@@ -249,10 +251,16 @@ Vector<double> CSSParserImpl::parseKeyframeKeyList(const String& keyList)
 
 bool CSSParserImpl::supportsDeclaration(CSSParserTokenRange& range)
 {
-    ASSERT(topContext().m_parsedProperties.isEmpty());
-    consumeDeclaration(range, StyleRuleType::Style);
-    bool result = !topContext().m_parsedProperties.isEmpty();
-    topContext().m_parsedProperties.clear();
+    bool result = false;
+
+    // We create a new nesting context to isolate the parsing of the @supports(...) prelude from declarations before or after.
+    // This only concerns the prelude,
+    // (the content of the block will also be in its own nesting context but it's not done here (cf consumeRegularRuleList))
+    runInNewNestingContext([&] {
+        ASSERT(topContext().m_parsedProperties.isEmpty());
+        result = consumeDeclaration(range, StyleRuleType::Style);
+    });
+
     return result;
 }
 
@@ -590,7 +598,7 @@ Vector<Ref<StyleRuleBase>> CSSParserImpl::consumeRegularRuleList(CSSParserTokenR
         return { };
 
     Vector<Ref<StyleRuleBase>> rules;
-    if (isNestedContext()) {
+    if (isStyleNestedContext()) {
         runInNewNestingContext([&] {
             consumeStyleBlock(block, StyleRuleType::Style, ParsingStyleDeclarationsInRuleList::Yes);
 
@@ -949,17 +957,13 @@ RefPtr<StyleRuleScope> CSSParserImpl::consumeScopeRule(CSSParserTokenRange prelu
     if (!m_context.cssScopeAtRuleEnabled)
         return nullptr;
 
-    // FIXME: implement mixing style nesting and scope nesting
-    if (isNestedContext())
-        return nullptr;
-
     auto preludeRangeCopy = prelude;
     CSSSelectorList scopeStart;
     CSSSelectorList scopeEnd;
 
     if (!prelude.atEnd()) {
         auto consumePrelude = [&] {
-            auto consumeScope = [&](auto& scope) {
+            auto consumeScope = [&](auto& scope, bool nestedContext) {
                 // Consume the left parenthesis
                 if (prelude.peek().type() != LeftParenthesisToken)
                     return false;
@@ -972,7 +976,7 @@ RefPtr<StyleRuleScope> CSSParserImpl::consumeScopeRule(CSSParserTokenRange prelu
                 CSSParserTokenRange selectorListRange = prelude.makeSubRange(selectorListRangeStart, &prelude.peek());
 
                 // Parse the selector list range
-                auto selectorList = parseCSSSelectorList(selectorListRange, m_context, m_styleSheet.get(), isNestedContext() ? CSSParserEnum::IsNestedContext::Yes : CSSParserEnum::IsNestedContext::No, CSSParserEnum::IsForgiving::Yes);
+                auto selectorList = parseCSSSelectorList(selectorListRange, m_context, m_styleSheet.get(), nestedContext ? CSSParserEnum::IsNestedContext::Yes : CSSParserEnum::IsNestedContext::No, CSSParserEnum::IsForgiving::Yes);
                 if (!selectorList)
                     return false;
 
@@ -985,7 +989,7 @@ RefPtr<StyleRuleScope> CSSParserImpl::consumeScopeRule(CSSParserTokenRange prelu
                 scope = WTFMove(*selectorList);
                 return true;
             };
-            auto successScopeStart = consumeScope(scopeStart);
+            auto successScopeStart = consumeScope(scopeStart, isNestedContext());
             if (successScopeStart && prelude.atEnd())
                 return true;
             if (prelude.peek().type() != IdentToken)
@@ -993,7 +997,7 @@ RefPtr<StyleRuleScope> CSSParserImpl::consumeScopeRule(CSSParserTokenRange prelu
             auto to = prelude.consumeIncludingWhitespace();
             if (!equalLettersIgnoringASCIICase(to.value(), "to"_s))
                 return false;
-            if (!consumeScope(scopeEnd))
+            if (!consumeScope(scopeEnd, true)) // scopeEnd is always considered nested, at least by the scopeStart
                 return false;
             if (!prelude.atEnd())
                 return false;
@@ -1010,7 +1014,13 @@ RefPtr<StyleRuleScope> CSSParserImpl::consumeScopeRule(CSSParserTokenRange prelu
         m_observerWrapper->observer().endRuleBody(m_observerWrapper->endOffset(block));
     }
 
-    auto rules = consumeRegularRuleList(block);
+    NestingLevelIncrementer incrementer { m_scopeRuleNestingLevel };
+    m_ancestorRuleTypeStack.append(AncestorRuleType::Scope);
+    Vector<Ref<StyleRuleBase>> rules;
+    consumeRuleList(block, RegularRuleList, [&rules](Ref<StyleRuleBase> rule) {
+        rules.append(rule);
+    });
+    m_ancestorRuleTypeStack.removeLast();
     return StyleRuleScope::create(WTFMove(scopeStart), WTFMove(scopeEnd), WTFMove(rules));
 }
 
@@ -1206,30 +1216,70 @@ static void observeSelectors(CSSParserObserverWrapper& wrapper, CSSParserTokenRa
 
 RefPtr<StyleRuleBase> CSSParserImpl::consumeStyleRule(CSSParserTokenRange prelude, CSSParserTokenRange block)
 {
-    auto selectorList = parseCSSSelectorList(prelude, m_context, m_styleSheet.get(), isNestedContext() ? CSSParserEnum::IsNestedContext::Yes : CSSParserEnum::IsNestedContext::No);
+    auto preludeCopyForInspector = prelude;
+    auto parserSelectorList = parseCSSParserSelectorList(prelude, m_context, m_styleSheet.get(), isNestedContext() ? CSSParserEnum::IsNestedContext::Yes : CSSParserEnum::IsNestedContext::No, CSSParserEnum::IsForgiving::No);
 
-    if (!selectorList)
+    if (parserSelectorList.isEmpty())
         return nullptr; // Parse error, invalid selector list
 
+    if (!m_ancestorRuleTypeStack.isEmpty()) {
+        // https://drafts.csswg.org/css-nesting/#cssom
+        // Relative selector should be absolutized (only when not "nest-containing" for the descendant one),
+        // with the implied nesting selector inserted.
+        auto last = m_ancestorRuleTypeStack.last();
+        auto appendImplicitIfNeeded = [&](auto& selector) {
+            auto selectorStartWithExplicitCombinator = [&] {
+                auto relation = selector->leftmostSimpleSelector()->selector()->relation();
+                return relation != CSSSelector::RelationType::Subselector && relation != CSSSelector::RelationType::DescendantSpace;
+            }();
+            // For a rule inside a style rule, we had the implicit & if it's not there already or if it starts with a combinator > ~ +
+            if (last == AncestorRuleType::Style) {
+                if (!selector->hasExplicitNestingParent() || selectorStartWithExplicitCombinator) {
+                    auto nestingParentSelector = makeUnique<CSSParserSelector>();
+                    nestingParentSelector->setMatch(CSSSelector::Match::NestingParent);
+                    // https://drafts.csswg.org/css-nesting/#nesting
+                    // Spec: nested rules with relative selectors include the specificity of their implied nesting selector.
+                    selector->appendTagHistoryAsRelative(WTFMove(nestingParentSelector));
+                }
+            // For a rule inside a scope rule, we had the implicit ":scope" if there is no explicit & or :scope already
+            } else if (last == AncestorRuleType::Scope) {
+                if ((!selector->hasExplicitNestingParent() && !selector->hasExplicitPseudoClassScope()) || selectorStartWithExplicitCombinator) {
+                    auto scopeSelector = makeUnique<CSSParserSelector>();
+                    scopeSelector->setMatch(CSSSelector::Match::PseudoClass);
+                    scopeSelector->setPseudoClassType(CSSSelector::PseudoClassType::Scope);
+                    scopeSelector->selector()->setImplicit();
+                    selector->appendTagHistoryAsRelative(WTFMove(scopeSelector));
+                }
+            }
+        };
+        for (auto& parserSelector : parserSelectorList)
+            appendImplicitIfNeeded(parserSelector);
+    }
+
+    auto selectorList = CSSSelectorList { WTFMove(parserSelectorList) };
+    ASSERT(!selectorList.isEmpty());
+
     if (m_observerWrapper)
-        observeSelectors(*m_observerWrapper, prelude);
+        observeSelectors(*m_observerWrapper, preludeCopyForInspector);
 
     RefPtr<StyleRuleBase> styleRule;
 
     runInNewNestingContext([&] {
         {
             NestingLevelIncrementer incrementer { m_styleRuleNestingLevel };
+            m_ancestorRuleTypeStack.append(AncestorRuleType::Style);
             consumeStyleBlock(block, StyleRuleType::Style);
+            m_ancestorRuleTypeStack.removeLast();
         }
 
         auto nestedRules = WTFMove(topContext().m_parsedRules);
         auto properties = createStyleProperties(topContext().m_parsedProperties, m_context.mode);
 
         // We save memory by creating a simple StyleRule instead of a heavier StyleRuleWithNesting when we don't need the CSS Nesting features.
-        if (nestedRules.isEmpty() && !selectorList->hasExplicitNestingParent() && !isNestedContext())
-            styleRule = StyleRule::create(WTFMove(properties), m_context.hasDocumentSecurityOrigin, WTFMove(*selectorList));
+        if (nestedRules.isEmpty() && !selectorList.hasExplicitNestingParent() && !isNestedContext())
+            styleRule = StyleRule::create(WTFMove(properties), m_context.hasDocumentSecurityOrigin, WTFMove(selectorList));
         else {
-            styleRule = StyleRuleWithNesting::create(WTFMove(properties), m_context.hasDocumentSecurityOrigin, WTFMove(*selectorList), WTFMove(nestedRules));
+            styleRule = StyleRuleWithNesting::create(WTFMove(properties), m_context.hasDocumentSecurityOrigin, WTFMove(selectorList), WTFMove(nestedRules));
             m_styleSheet->setHasNestingRules();
         }
     });

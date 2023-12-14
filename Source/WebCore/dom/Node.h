@@ -73,13 +73,20 @@ class ShadowRoot;
 class TouchEvent;
 class WebCoreOpaqueRoot;
 
+}
+
+WTF_ALLOW_COMPACT_POINTERS_TO_INCOMPLETE_TYPE(WebCore::RenderObject);
+WTF_ALLOW_COMPACT_POINTERS_TO_INCOMPLETE_TYPE(WebCore::NodeRareData);
+
+namespace WebCore {
+
 enum class MutationObserverOptionType : uint8_t;
 using MutationObserverOptions = OptionSet<MutationObserverOptionType>;
 using MutationRecordDeliveryOptions = OptionSet<MutationObserverOptionType>;
 
 using NodeOrString = std::variant<RefPtr<Node>, String>;
 
-class Node : public EventTarget {
+class Node : public EventTarget, public CanMakeCheckedPtr {
     WTF_MAKE_ISO_ALLOCATED(Node);
 
     friend class Document;
@@ -339,8 +346,9 @@ public:
     void setUserActionElement(bool flag) { setNodeFlag(NodeFlag::IsUserActionElement, flag); }
 
     bool inRenderedDocument() const;
-    bool needsStyleRecalc() const { return styleValidity() != Style::Validity::Valid; }
+    bool needsStyleRecalc() const { return styleValidity() != Style::Validity::Valid || hasInvalidRenderer(); }
     Style::Validity styleValidity() const { return styleBitfields().styleValidity(); }
+    bool hasInvalidRenderer() const { return hasStyleFlag(NodeStyleFlag::HasInvalidRenderer); }
     bool styleResolutionShouldRecompositeLayer() const { return hasStyleFlag(NodeStyleFlag::StyleResolutionShouldRecompositeLayer); }
     bool childNeedsStyleRecalc() const { return hasStyleFlag(NodeStyleFlag::DescendantNeedsStyleResolution); }
     bool isEditingText() const { return hasNodeFlag(NodeFlag::IsEditingText); }
@@ -351,9 +359,6 @@ public:
     void clearChildNeedsStyleRecalc();
 
     void setHasValidStyle();
-
-    bool isLink() const { return hasNodeFlag(NodeFlag::IsLink); }
-    void setIsLink(bool flag) { setNodeFlag(NodeFlag::IsLink, flag); }
 
     bool isInGCReacheableRefMap() const { return hasNodeFlag(NodeFlag::IsInGCReachableRefMap); }
     void setIsInGCReacheableRefMap(bool flag) { setNodeFlag(NodeFlag::IsInGCReachableRefMap, flag); }
@@ -677,19 +682,20 @@ protected:
         DescendantNeedsStyleResolution                          = 1 << 0,
         DirectChildNeedsStyleResolution                         = 1 << 1,
         StyleResolutionShouldRecompositeLayer                   = 1 << 2,
+        HasInvalidRenderer                                      = 1 << 3,
 
-        ChildrenAffectedByFirstChildRules                       = 1 << 3,
-        ChildrenAffectedByLastChildRules                        = 1 << 4,
-        AffectsNextSiblingElementStyle                          = 1 << 5,
-        StyleIsAffectedByPreviousSibling                        = 1 << 6,
-        DescendantsAffectedByPreviousSibling                    = 1 << 7,
-        StyleAffectedByEmpty                                    = 1 << 8,
+        ChildrenAffectedByFirstChildRules                       = 1 << 4,
+        ChildrenAffectedByLastChildRules                        = 1 << 5,
+        AffectsNextSiblingElementStyle                          = 1 << 6,
+        StyleIsAffectedByPreviousSibling                        = 1 << 7,
+        DescendantsAffectedByPreviousSibling                    = 1 << 8,
+        StyleAffectedByEmpty                                    = 1 << 9,
         // We optimize for :first-child and :last-child. The other positional child selectors like nth-child or
         // *-child-of-type, we will just give up and re-evaluate whenever children change at all.
-        ChildrenAffectedByForwardPositionalRules                = 1 << 9,
-        DescendantsAffectedByForwardPositionalRules             = 1 << 10,
-        ChildrenAffectedByBackwardPositionalRules               = 1 << 11,
-        DescendantsAffectedByBackwardPositionalRules            = 1 << 12,
+        ChildrenAffectedByForwardPositionalRules                = 1 << 10,
+        DescendantsAffectedByForwardPositionalRules             = 1 << 11,
+        ChildrenAffectedByBackwardPositionalRules               = 1 << 12,
+        DescendantsAffectedByBackwardPositionalRules            = 1 << 13,
     };
 
     struct StyleBitfields {
@@ -882,7 +888,7 @@ inline void Node::setHasValidStyle()
 {
     auto bitfields = styleBitfields();
     bitfields.setStyleValidity(Style::Validity::Valid);
-    bitfields.clearFlag(NodeStyleFlag::StyleResolutionShouldRecompositeLayer);
+    bitfields.clearFlags({ NodeStyleFlag::HasInvalidRenderer, NodeStyleFlag::StyleResolutionShouldRecompositeLayer });
     setStyleBitfields(bitfields);
     clearNodeFlag(NodeFlag::IsComputedStyleInvalidFlag);
 }

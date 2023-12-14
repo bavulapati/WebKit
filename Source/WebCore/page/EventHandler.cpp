@@ -843,10 +843,10 @@ bool EventHandler::handleMousePressEvent(const MouseEventWithHitTestResults& eve
     if (event.isOverWidget() && passWidgetMouseDownEventToWidget(event))
         return true;
 
-    if (is<SVGDocument>(*frame->document()) && downcast<SVGDocument>(*frame->document()).zoomAndPanEnabled()) {
+    if (RefPtr svgDocument = dynamicDowncast<SVGDocument>(*frame->protectedDocument()); svgDocument && svgDocument->zoomAndPanEnabled()) {
         if (event.event().shiftKey() && singleClick) {
             m_svgPan = true;
-            downcast<SVGDocument>(*frame->protectedDocument()).startPan(frame->protectedView()->windowToContents(event.event().position()));
+            svgDocument->startPan(frame->protectedView()->windowToContents(event.event().position()));
             return true;
         }
     }
@@ -1198,9 +1198,10 @@ void EventHandler::didPanScrollStop()
 
 void EventHandler::startPanScrolling(RenderElement& renderer)
 {
-    if (!is<RenderBox>(renderer))
+    CheckedPtr renderBox = dynamicDowncast<RenderBox>(renderer);
+    if (renderBox)
         return;
-    m_autoscrollController->startPanScrolling(downcast<RenderBox>(renderer), lastKnownMousePosition());
+    m_autoscrollController->startPanScrolling(*renderBox, lastKnownMousePosition());
     invalidateClick();
 }
 
@@ -1395,20 +1396,21 @@ RefPtr<Frame> EventHandler::subframeForTargetNode(Node* node)
     if (!node)
         return nullptr;
 
-    auto renderer = node->renderer();
-    if (!is<RenderWidget>(renderer))
+    CheckedPtr renderWidget = dynamicDowncast<RenderWidget>(node->renderer());
+    if (!renderWidget)
         return nullptr;
 
-    Widget* widget = downcast<RenderWidget>(*renderer).widget();
-    if (!is<FrameView>(widget))
+    auto* frameView = dynamicDowncast<FrameView>(renderWidget->widget());
+    if (!frameView)
         return nullptr;
 
-    return &downcast<FrameView>(*widget).frame();
+    return &frameView->frame();
 }
 
 static bool isSubmitImage(Node* node)
 {
-    return is<HTMLInputElement>(node) && downcast<HTMLInputElement>(*node).isImageButton();
+    RefPtr input = dynamicDowncast<HTMLInputElement>(node);
+    return input && input->isImageButton();
 }
 
 // Returns true if the node's editable block is not current focused for editing
@@ -1740,7 +1742,7 @@ static LayoutPoint documentPointForWindowPoint(LocalFrame& frame, const IntPoint
     return view ? view->windowToContents(windowPoint) : windowPoint;
 }
 
-std::optional<RemoteUserInputEventData> EventHandler::mouseEventDataForRemoteFrame(const RemoteFrame* remoteFrame, const IntPoint& pointInFrame)
+std::optional<RemoteUserInputEventData> EventHandler::userInputEventDataForRemoteFrame(const RemoteFrame* remoteFrame, const IntPoint& pointInFrame)
 {
     if (!remoteFrame)
         return std::nullopt;
@@ -1790,7 +1792,7 @@ HandleUserInputEventResult EventHandler::handleMousePressEvent(const PlatformMou
         return true;
 
 #if ENABLE(TOUCH_EVENTS)
-    bool defaultPrevented = dispatchSyntheticTouchEventIfEnabled(platformMouseEvent);
+    bool defaultPrevented = dispatchSyntheticTouchEventIfEnabled(platformMouseEvent).wasHandled();
     if (defaultPrevented)
         return true;
 #endif
@@ -1843,7 +1845,7 @@ HandleUserInputEventResult EventHandler::handleMousePressEvent(const PlatformMou
 
     if (!passedToScrollbar) {
         auto subframe = subframeForHitTestResult(mouseEvent);
-        if (auto remoteMouseEventData = mouseEventDataForRemoteFrame(dynamicDowncast<RemoteFrame>(subframe).get(), mouseEvent.hitTestResult().roundedPointInInnerNodeFrame()))
+        if (auto remoteMouseEventData = userInputEventDataForRemoteFrame(dynamicDowncast<RemoteFrame>(subframe).get(), mouseEvent.hitTestResult().roundedPointInInnerNodeFrame()))
             return *remoteMouseEventData;
 
         auto captureMouseEventsElementIfNeeded = [&](RefPtr<Element>&& element = nullptr) {
@@ -1899,7 +1901,7 @@ HandleUserInputEventResult EventHandler::handleMousePressEvent(const PlatformMou
     auto localPoint = roundedIntPoint(mouseEvent.hitTestResult().localPoint());
     if (layer && layer->isPointInResizeControl(localPoint)) {
         layer->setInResizeMode(true);
-        m_resizeLayer = WeakPtr { layer };
+        m_resizeLayer = *layer;
         m_offsetFromResizeCorner = layer->offsetFromResizeCorner(localPoint);
         return true;
     }
@@ -1926,7 +1928,7 @@ HandleUserInputEventResult EventHandler::handleMousePressEvent(const PlatformMou
         // If a mouse event handler changes the input element type to one that has a widget associated,
         // we'd like to EventHandler::handleMousePressEvent to pass the event to the widget and thus the
         // event target node can't still be the shadow node.
-        if (is<ShadowRoot>(*mouseEvent.targetNode()) && is<HTMLInputElement>(*downcast<ShadowRoot>(*mouseEvent.targetNode()).host()))
+        if (RefPtr shadowRoot = dynamicDowncast<ShadowRoot>(*mouseEvent.targetNode()); shadowRoot && is<HTMLInputElement>(shadowRoot->host()))
             mouseEvent = frame->protectedDocument()->prepareMouseEvent(HitTestRequest(), documentPoint, platformMouseEvent);
     }
 
@@ -1997,8 +1999,8 @@ ScrollableArea* EventHandler::enclosingScrollableArea(Node* node)
         if (!renderer)
             continue;
 
-        if (is<RenderListBox>(*renderer)) {
-            auto* scrollableArea = static_cast<ScrollableArea*>(downcast<RenderListBox>(renderer));
+        if (auto* renderListBox = dynamicDowncast<RenderListBox>(*renderer)) {
+            auto* scrollableArea = static_cast<ScrollableArea*>(renderListBox);
             if (scrollableArea->isScrollableOrRubberbandable())
                 return scrollableArea;
         }
@@ -2088,7 +2090,7 @@ HitTestResult EventHandler::getHitTestResultForMouseEvent(const PlatformMouseEve
 HandleUserInputEventResult EventHandler::handleMouseMoveEvent(const PlatformMouseEvent& platformMouseEvent, HitTestResult* hitTestResult, bool onlyUpdateScrollbars)
 {
 #if ENABLE(TOUCH_EVENTS)
-    bool defaultPrevented = dispatchSyntheticTouchEventIfEnabled(platformMouseEvent);
+    bool defaultPrevented = dispatchSyntheticTouchEventIfEnabled(platformMouseEvent).wasHandled();
     if (defaultPrevented)
         return true;
 #endif
@@ -2161,7 +2163,7 @@ HandleUserInputEventResult EventHandler::handleMouseMoveEvent(const PlatformMous
 
     bool swallowEvent = false;
     auto subframe = isCapturingMouseEventsElement() ? subframeForTargetNode(m_capturingMouseEventsElement.get()) : subframeForHitTestResult(mouseEvent);
-    if (auto remoteMouseEventData = mouseEventDataForRemoteFrame(dynamicDowncast<RemoteFrame>(subframe).get(), mouseEvent.hitTestResult().roundedPointInInnerNodeFrame()))
+    if (auto remoteMouseEventData = userInputEventDataForRemoteFrame(dynamicDowncast<RemoteFrame>(subframe).get(), mouseEvent.hitTestResult().roundedPointInInnerNodeFrame()))
         return *remoteMouseEventData;
 
     RefPtr localSubframe = dynamicDowncast<LocalFrame>(subframe.get());
@@ -2257,7 +2259,7 @@ HandleUserInputEventResult EventHandler::handleMouseReleaseEvent(const PlatformM
         return true;
 
 #if ENABLE(TOUCH_EVENTS)
-    bool defaultPrevented = dispatchSyntheticTouchEventIfEnabled(platformMouseEvent);
+    bool defaultPrevented = dispatchSyntheticTouchEventIfEnabled(platformMouseEvent).wasHandled();
     if (defaultPrevented)
         return true;
 #endif
@@ -2300,7 +2302,7 @@ HandleUserInputEventResult EventHandler::handleMouseReleaseEvent(const PlatformM
     if (m_eventHandlerWillResetCapturingMouseEventsElement)
         resetCapturingMouseEventsElement();
 
-    if (auto remoteMouseEventData = mouseEventDataForRemoteFrame(dynamicDowncast<RemoteFrame>(subframe).get(), mouseEvent.hitTestResult().roundedPointInInnerNodeFrame()))
+    if (auto remoteMouseEventData = userInputEventDataForRemoteFrame(dynamicDowncast<RemoteFrame>(subframe).get(), mouseEvent.hitTestResult().roundedPointInInnerNodeFrame()))
         return *remoteMouseEventData;
 
     RefPtr localSubframe = dynamicDowncast<LocalFrame>(subframe.get());
@@ -2452,10 +2454,11 @@ bool EventHandler::canDropCurrentlyDraggedImageAsFile() const
 
 static std::pair<bool, RefPtr<LocalFrame>> contentFrameForNode(Node* target)
 {
-    if (!is<HTMLFrameElementBase>(target))
+    RefPtr frameElement = dynamicDowncast<HTMLFrameElementBase>(target);
+    if (!frameElement)
         return { false, nullptr };
 
-    return { true, dynamicDowncast<LocalFrame>(downcast<HTMLFrameElementBase>(*target).contentFrame()) };
+    return { true, dynamicDowncast<LocalFrame>(frameElement->contentFrame()) };
 }
 
 static std::optional<DragOperation> convertDropZoneOperationToDragOperation(const String& dragOperation)
@@ -2497,7 +2500,9 @@ static bool hasDropZoneType(DataTransfer& dataTransfer, const String& keyword)
 
 static bool findDropZone(Node& target, DataTransfer& dataTransfer)
 {
-    RefPtr<Element> element = is<Element>(target) ? &downcast<Element>(target) : target.parentElement();
+    RefPtr element = dynamicDowncast<Element>(target);
+    if (!element)
+        element = target.parentElement();
     for (; element; element = element->parentElement()) {
         SpaceSplitString keywords(element->attributeWithoutSynchronization(webkitdropzoneAttr), SpaceSplitString::ShouldFoldCase::Yes);
         bool matched = false;
@@ -3045,20 +3050,20 @@ Widget* EventHandler::widgetForEventTarget(Element* eventTarget)
     if (!eventTarget)
         return nullptr;
 
-    auto* target = eventTarget->renderer();
-    if (!is<RenderWidget>(target))
+    auto* renderWidget = dynamicDowncast<RenderWidget>(eventTarget->renderer());
+    if (!renderWidget)
         return nullptr;
 
-    return downcast<RenderWidget>(*target).widget();
+    return renderWidget->widget();
 }
 
 static WeakPtr<Widget> widgetForElement(const Element& element)
 {
-    auto target = element.renderer();
-    if (!is<RenderWidget>(target) || !downcast<RenderWidget>(*target).widget())
+    auto* renderWidget = dynamicDowncast<RenderWidget>(element.renderer());
+    if (!renderWidget || !renderWidget->widget())
         return { };
 
-    return *downcast<RenderWidget>(*target).widget();
+    return *renderWidget->widget();
 }
 
 bool EventHandler::completeWidgetWheelEvent(const PlatformWheelEvent& event, const WeakPtr<Widget>& widget, const WeakPtr<ScrollableArea>& scrollableArea)
@@ -3080,7 +3085,7 @@ bool EventHandler::completeWidgetWheelEvent(const PlatformWheelEvent& event, con
     return platformCompletePlatformWidgetWheelEvent(event, *widget.get(), scrollableArea);
 }
 
-bool EventHandler::handleWheelEvent(const PlatformWheelEvent& wheelEvent, OptionSet<WheelEventProcessingSteps> processingSteps)
+HandleUserInputEventResult EventHandler::handleWheelEvent(const PlatformWheelEvent& wheelEvent, OptionSet<WheelEventProcessingSteps> processingSteps)
 {
     Ref frame = m_frame.get();
 #if ENABLE(KINETIC_SCROLLING)
@@ -3089,13 +3094,13 @@ bool EventHandler::handleWheelEvent(const PlatformWheelEvent& wheelEvent, Option
 #endif
 
     OptionSet<EventHandling> handling;
-    bool handled = handleWheelEventInternal(wheelEvent, processingSteps, handling);
+    auto handleWheelEventResult = handleWheelEventInternal(wheelEvent, processingSteps, handling);
     // wheelEventWasProcessedByMainThread() may have already been called via performDefaultWheelEventHandling(), but this ensures that it's always called if that code path doesn't run.
     wheelEventWasProcessedByMainThread(wheelEvent, handling);
-    return handled;
+    return handleWheelEventResult;
 }
 
-bool EventHandler::handleWheelEventInternal(const PlatformWheelEvent& event, OptionSet<WheelEventProcessingSteps> processingSteps, OptionSet<EventHandling>& handling)
+HandleUserInputEventResult EventHandler::handleWheelEventInternal(const PlatformWheelEvent& event, OptionSet<WheelEventProcessingSteps> processingSteps, OptionSet<EventHandling>& handling)
 {
     Ref frame = m_frame.get();
     RefPtr document = frame->document();
@@ -3152,7 +3157,10 @@ bool EventHandler::handleWheelEventInternal(const PlatformWheelEvent& event, Opt
 
     if (element) {
         if (isOverWidget) {
-            if (WeakPtr<Widget> widget = widgetForElement(*element)) {
+            if (RefPtr remoteSubframe = dynamicDowncast<RemoteFrame>(subframeForTargetNode(result.targetNode()))) {
+                if (auto wheelEventDataForRemoteFrame = userInputEventDataForRemoteFrame(remoteSubframe.get(), result.roundedPointInInnerNodeFrame()))
+                    return *wheelEventDataForRemoteFrame;
+            } else if (WeakPtr<Widget> widget = widgetForElement(*element)) {
                 if (passWheelEventToWidget(event, *widget.get(), processingSteps))
                     return completeWidgetWheelEvent(event, widget, scrollableArea);
             }
@@ -3241,15 +3249,15 @@ bool EventHandler::handleWheelEventInAppropriateEnclosingBox(Node* startNode, co
     RenderBox& initialEnclosingBox = startNode->renderer()->enclosingBox();
 
     // RenderListBox is special because it's a ScrollableArea that the scrolling tree doesn't know about.
-    if (is<RenderListBox>(initialEnclosingBox))
-        handleWheelEventPhaseInScrollableArea(downcast<RenderListBox>(initialEnclosingBox), wheelEvent);
+    if (CheckedPtr renderListBox = dynamicDowncast<RenderListBox>(initialEnclosingBox))
+        handleWheelEventPhaseInScrollableArea(*renderListBox, wheelEvent);
 
     if (!shouldHandleEvent)
         return false;
 
     auto scrollableAreaForBox = [](RenderBox& box) -> ScrollableArea* {
-        if (is<RenderListBox>(box))
-            return &downcast<RenderListBox>(box);
+        if (auto* renderListBox = dynamicDowncast<RenderListBox>(box))
+            return renderListBox;
 
         if (box.hasLayer())
             return box.layer()->scrollableArea();
@@ -3719,10 +3727,10 @@ bool EventHandler::keyEvent(const PlatformKeyboardEvent& keyEvent)
 
 void EventHandler::capsLockStateMayHaveChanged() const
 {
-    RefPtr focusedElement = m_frame->document()->focusedElement();
-    if (!is<HTMLInputElement>(focusedElement))
+    RefPtr input = dynamicDowncast<HTMLInputElement>(m_frame->document()->focusedElement());
+    if (!input)
         return;
-    downcast<HTMLInputElement>(*focusedElement).capsLockStateMayHaveChanged();
+    input->capsLockStateMayHaveChanged();
 }
 
 bool EventHandler::internalKeyEvent(const PlatformKeyboardEvent& initialKeyEvent)
@@ -4120,7 +4128,7 @@ void EventHandler::invalidateDataTransfer()
 static void removeDraggedContentDocumentMarkersFromAllFramesInPage(Page& page)
 {
     page.forEachDocument([] (Document& document) {
-        document.markers().removeMarkers(DocumentMarker::DraggedContent);
+        document.markers().removeMarkers(DocumentMarker::Type::DraggedContent);
     });
 
     if (auto* localMainFrame = dynamicDowncast<LocalFrame>(page.mainFrame())) {
@@ -4841,7 +4849,7 @@ static HitTestResult hitTestResultInFrame(LocalFrame* frame, const LayoutPoint& 
     return result;
 }
 
-bool EventHandler::handleTouchEvent(const PlatformTouchEvent& event)
+HandleUserInputEventResult EventHandler::handleTouchEvent(const PlatformTouchEvent& event)
 {
     Ref frame = m_frame.get();
 
@@ -5076,7 +5084,7 @@ bool EventHandler::handleTouchEvent(const PlatformTouchEvent& event)
 #endif // ENABLE(TOUCH_EVENTS) && !ENABLE(IOS_TOUCH_EVENTS)
 
 #if ENABLE(TOUCH_EVENTS)
-bool EventHandler::dispatchSyntheticTouchEventIfEnabled(const PlatformMouseEvent& platformMouseEvent)
+HandleUserInputEventResult EventHandler::dispatchSyntheticTouchEventIfEnabled(const PlatformMouseEvent& platformMouseEvent)
 {
 #if ENABLE(IOS_TOUCH_EVENTS)
     UNUSED_PARAM(platformMouseEvent);
@@ -5139,7 +5147,7 @@ bool EventHandler::passWheelEventToWidget(const PlatformWheelEvent& event, Widge
     if (!frameView)
         return false;
 
-    return frameView->frame().eventHandler().handleWheelEvent(event, processingSteps);
+    return frameView->frame().eventHandler().handleWheelEvent(event, processingSteps).wasHandled();
 }
 
 bool EventHandler::tabsToAllFormControls(KeyboardEvent*) const
@@ -5155,10 +5163,11 @@ bool EventHandler::passWidgetMouseDownEventToWidget(RenderWidget* renderWidget)
 
 bool EventHandler::passWidgetMouseDownEventToWidget(const MouseEventWithHitTestResults& event)
 {
-    RenderObject* target = event.targetNode() ? event.targetNode()->renderer() : nullptr;
-    if (!is<RenderWidget>(target))
+    auto* target = event.targetNode() ? event.targetNode()->renderer() : nullptr;
+    auto* renderWidget = dynamicDowncast<RenderWidget>(target);
+    if (!renderWidget)
         return false;
-    return passMouseDownEventToWidget(downcast<RenderWidget>(*target).widget());
+    return passMouseDownEventToWidget(renderWidget->widget());
 }
 
 bool EventHandler::passMouseDownEventToWidget(Widget*)

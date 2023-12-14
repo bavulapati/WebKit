@@ -68,18 +68,18 @@ public:
 };
 
 // Do not make WeakPtrImplWithEventTargetData a derived class of DefaultWeakPtrImpl to catch the bug which uses incorrect impl class.
-class WeakPtrImplWithEventTargetData final : public WTF::WeakPtrImplBase<WeakPtrImplWithEventTargetData> {
+class WeakPtrImplWithEventTargetData final : public WTF::WeakPtrImplBaseSingleThread<WeakPtrImplWithEventTargetData> {
 public:
     EventTargetData& eventTargetData() { return m_eventTargetData; }
     const EventTargetData& eventTargetData() const { return m_eventTargetData; }
 
-    template<typename T> WeakPtrImplWithEventTargetData(T* ptr) : WTF::WeakPtrImplBase<WeakPtrImplWithEventTargetData>(ptr) { }
+    template<typename T> WeakPtrImplWithEventTargetData(T* ptr) : WTF::WeakPtrImplBaseSingleThread<WeakPtrImplWithEventTargetData>(ptr) { }
 
 private:
     EventTargetData m_eventTargetData;
 };
 
-class EventTarget : public ScriptWrappable, public CanMakeWeakPtr<EventTarget, WeakPtrFactoryInitialization::Lazy, WeakPtrImplWithEventTargetData>, public CanMakeCheckedPtr {
+class EventTarget : public ScriptWrappable, public CanMakeWeakPtrWithBitField<EventTarget, WeakPtrFactoryInitialization::Lazy, WeakPtrImplWithEventTargetData> {
     WTF_MAKE_ISO_ALLOCATED(EventTarget);
 public:
     static Ref<EventTarget> create(ScriptExecutionContext&);
@@ -162,13 +162,14 @@ protected:
     WEBCORE_EXPORT virtual ~EventTarget();
 
     enum class EventTargetFlag : uint16_t {
-        HasEventTargetData = 1 << 0,
-        IsNode = 1 << 1,
+        HasEventTargetData                          = 1 << 0,
+        IsNode                                      = 1 << 1,
         // Element bits
-        HasDuplicateAttribute = 1 << 2,
-        HasLangAttr = 1 << 3,
-        HasXMLLangAttr = 1 << 4,
-        EffectiveLangKnownToMatchDocumentElement = 1 << 5,
+        HasDuplicateAttribute                       = 1 << 2,
+        HasLangAttr                                 = 1 << 3,
+        HasXMLLangAttr                              = 1 << 4,
+        EffectiveLangKnownToMatchDocumentElement    = 1 << 5,
+        EverHadSmoothScroll                         = 1 << 6,
     };
 
     EventTargetData& ensureEventTargetData()

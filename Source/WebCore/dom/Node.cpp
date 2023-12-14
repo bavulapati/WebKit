@@ -106,7 +106,7 @@ WTF_MAKE_ISO_ALLOCATED_IMPL(Node);
 
 using namespace HTMLNames;
 
-struct SameSizeAsNode : public EventTarget {
+struct SameSizeAsNode : EventTarget, CanMakeCheckedPtr {
 #if ASSERT_ENABLED
     bool deletionHasBegun;
     bool inRemovedLastRefFunction;
@@ -909,8 +909,18 @@ void Node::adjustStyleValidity(Style::Validity validity, Style::InvalidationMode
         bitfields.setStyleValidity(validity);
         setStyleBitfields(bitfields);
     }
-    if (mode == Style::InvalidationMode::RecompositeLayer)
+
+    switch (mode) {
+    case Style::InvalidationMode::Normal:
+        break;
+    case Style::InvalidationMode::RecompositeLayer:
         setStyleFlag(NodeStyleFlag::StyleResolutionShouldRecompositeLayer);
+        break;
+    case Style::InvalidationMode::RebuildRenderer:
+    case Style::InvalidationMode::InsertedIntoAncestor:
+        setStyleFlag(NodeStyleFlag::HasInvalidRenderer);
+        break;
+    };
 }
 
 void Node::updateAncestorsForStyleRecalc()
@@ -949,7 +959,6 @@ void Node::markAncestorsForInvalidatedStyle()
 
 void Node::invalidateStyle(Style::Validity validity, Style::InvalidationMode mode)
 {
-    ASSERT(validity != Style::Validity::Valid);
     if (!inRenderedDocument())
         return;
 
@@ -957,11 +966,10 @@ void Node::invalidateStyle(Style::Validity validity, Style::InvalidationMode mod
     if (document().inRenderTreeUpdate())
         return;
 
-    // FIXME: This should be set on all descendants in case of a subtree invalidation.
-    setNodeFlag(NodeFlag::IsComputedStyleInvalidFlag);
+    if (validity != Style::Validity::Valid)
+        setNodeFlag(NodeFlag::IsComputedStyleInvalidFlag);
 
-    // FIXME: Why the second condition?
-    bool markAncestors = styleValidity() == Style::Validity::Valid || validity == Style::Validity::SubtreeAndRenderersInvalid;
+    bool markAncestors = styleValidity() == Style::Validity::Valid || mode == Style::InvalidationMode::InsertedIntoAncestor;
 
     adjustStyleValidity(validity, mode);
 
@@ -1423,7 +1431,7 @@ Node::InsertedIntoAncestorResult Node::insertedIntoAncestor(InsertionType insert
     if (parentOfInsertedTree.isInShadowTree())
         setNodeFlag(NodeFlag::IsInShadowTree);
 
-    invalidateStyle(Style::Validity::SubtreeAndRenderersInvalid);
+    invalidateStyle(Style::Validity::SubtreeInvalid, Style::InvalidationMode::InsertedIntoAncestor);
 
     return InsertedIntoAncestorResult::Done;
 }
@@ -2087,8 +2095,8 @@ Element* Node::enclosingLinkEventParentOrSelf()
         // For imagemaps, the enclosing link element is the associated area element not the image itself.
         // So we don't let images be the enclosing link element, even though isLink sometimes returns
         // true for them.
-        if (node->isLink() && !is<HTMLImageElement>(*node))
-            return downcast<Element>(node);
+        if (auto* element = dynamicDowncast<Element>(*node); element && element->isLink() && !is<HTMLImageElement>(*element))
+            return element;
     }
 
     return nullptr;

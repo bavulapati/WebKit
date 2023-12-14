@@ -29,8 +29,9 @@
 #include "Element.h"
 #include "ExceptionOr.h"
 #include "FloatSize.h"
-#include "FragmentScriptingPermission.h"
 #include "HTMLInterchange.h"
+#include "MarkupExclusionRule.h"
+#include "ParserContentPolicy.h"
 #include <wtf/Forward.h>
 #include <wtf/Function.h>
 #include <wtf/HashMap.h>
@@ -79,7 +80,7 @@ private:
 };
 
 WEBCORE_EXPORT Ref<DocumentFragment> createFragmentFromText(const SimpleRange& context, const String& text);
-WEBCORE_EXPORT Ref<DocumentFragment> createFragmentFromMarkup(Document&, const String& markup, const String& baseURL, OptionSet<ParserContentPolicy> = { ParserContentPolicy::AllowScriptingContent, ParserContentPolicy::AllowPluginContent });
+WEBCORE_EXPORT Ref<DocumentFragment> createFragmentFromMarkup(Document&, const String& markup, const String& baseURL, OptionSet<ParserContentPolicy> = { ParserContentPolicy::AllowScriptingContent });
 ExceptionOr<Ref<DocumentFragment>> createFragmentForInnerOuterHTML(Element&, const String& markup, OptionSet<ParserContentPolicy>);
 RefPtr<DocumentFragment> createFragmentForTransformToFragment(Document&, String&& sourceString, const String& sourceMIMEType);
 Ref<DocumentFragment> createFragmentForImageAndURL(Document&, const String&, PresentationSize preferredSize);
@@ -100,7 +101,7 @@ String serializePreservingVisualAppearance(const VisibleSelection&, ResolveURLs 
 enum class SerializedNodes : uint8_t { SubtreeIncludingNode, SubtreesOfChildren };
 enum class SerializationSyntax : uint8_t { HTML, XML };
 enum class ShouldIncludeShadowDOM : bool { No, Yes };
-WEBCORE_EXPORT String serializeFragment(const Node&, SerializedNodes, Vector<Ref<Node>>* = nullptr, ResolveURLs = ResolveURLs::No, Vector<QualifiedName>* tagNamesToSkip = nullptr, std::optional<SerializationSyntax> = std::nullopt, HashMap<String, String>&& replacementURLStrings = { }, HashMap<RefPtr<CSSStyleSheet>, String>&& replacementURLStringsForCSSStyleSheet = { }, ShouldIncludeShadowDOM = ShouldIncludeShadowDOM::No);
+WEBCORE_EXPORT String serializeFragment(const Node&, SerializedNodes, Vector<Ref<Node>>* = nullptr, ResolveURLs = ResolveURLs::No, std::optional<SerializationSyntax> = std::nullopt, HashMap<String, String>&& replacementURLStrings = { }, HashMap<RefPtr<CSSStyleSheet>, String>&& replacementURLStringsForCSSStyleSheet = { }, ShouldIncludeShadowDOM = ShouldIncludeShadowDOM::No, const Vector<MarkupExclusionRule>& exclusionRules = { });
 
 String urlToMarkup(const URL&, const String& title);
 

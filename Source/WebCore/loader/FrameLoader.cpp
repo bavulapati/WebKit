@@ -105,6 +105,7 @@
 #include "PluginDocument.h"
 #include "PolicyChecker.h"
 #include "ProgressTracker.h"
+#include "Quirks.h"
 #include "ReportingScope.h"
 #include "ResourceLoadInfo.h"
 #include "ResourceLoadObserver.h"
@@ -314,7 +315,7 @@ public:
     }
 
 private:
-    CheckedRef<LocalFrame> m_frame;
+    WeakRef<LocalFrame> m_frame;
     bool m_inProgress { false };
 };
 
@@ -353,9 +354,10 @@ Ref<LocalFrame> FrameLoader::protectedFrame() const
 
 void FrameLoader::detachFromAllOpenedFrames()
 {
-    for (auto& frame : m_openedFrames)
+    for (auto& frame : m_openedFrames) {
         if (RefPtr localFrame = dynamicDowncast<LocalFrame>(frame))
             localFrame->loader().m_opener = nullptr;
+    }
     m_openedFrames.clear();
 }
 
@@ -1148,7 +1150,8 @@ void FrameLoader::resetMultipleFormSubmissionProtection()
 
 void FrameLoader::updateFirstPartyForCookies()
 {
-    setFirstPartyForCookies(m_frame->page()->mainFrameURL());
+    if (CheckedPtr page = m_frame->page())
+        setFirstPartyForCookies(page->mainFrameURL());
 }
 
 void FrameLoader::setFirstPartyForCookies(const URL& url)
@@ -1264,10 +1267,8 @@ void FrameLoader::completed()
 {
     Ref frame = m_frame.get();
 
-    for (RefPtr descendant = frame->tree().traverseNext(m_frame.ptr()); descendant; descendant = descendant->tree().traverseNext(m_frame.ptr())) {
-        if (RefPtr localDescendant = dynamicDowncast<LocalFrame>(*descendant))
-            localDescendant->navigationScheduler().startTimer();
-    }
+    for (RefPtr descendant = frame->tree().traverseNext(m_frame.ptr()); descendant; descendant = descendant->tree().traverseNext(m_frame.ptr()))
+        descendant->navigationScheduler().startTimer();
 
     if (RefPtr parent = m_frame->tree().parent()) {
         if (RefPtr localParent = dynamicDowncast<LocalFrame>(parent.releaseNonNull()))
@@ -1424,7 +1425,7 @@ void FrameLoader::loadURL(FrameLoadRequest&& frameLoadRequest, const String& ref
     bool isFormSubmission = formState;
 
     // The search for a target frame is done earlier in the case of form submission.
-    RefPtr targetFrame = isFormSubmission ? nullptr : findFrameForNavigation(effectiveFrameName);
+    RefPtr targetFrame = isFormSubmission ? nullptr : dynamicDowncast<LocalFrame>(findFrameForNavigation(effectiveFrameName));
     if (targetFrame && targetFrame != frame.ptr()) {
         frameLoadRequest.setFrameName(selfTargetFrameName());
         targetFrame->checkedLoader()->loadURL(WTFMove(frameLoadRequest), referrer, newLoadType, event, WTFMove(formState), WTFMove(privateClickMeasurement), completionHandlerCaller.release());
@@ -1535,7 +1536,7 @@ void FrameLoader::load(FrameLoadRequest&& request)
         return;
 
     if (!request.frameName().isEmpty()) {
-        if (RefPtr frame = findFrameForNavigation(request.frameName())) {
+        if (RefPtr frame = dynamicDowncast<LocalFrame>(findFrameForNavigation(request.frameName()))) {
             request.setShouldCheckNewWindowPolicy(false);
             if (&frame->loader() != this) {
                 frame->checkedLoader()->load(WTFMove(request));
@@ -2447,11 +2448,13 @@ void FrameLoader::open(CachedFrameBase& cachedFrame)
     
     // When navigating to a CachedFrame its FrameView should never be null.  If it is we'll crash in creative ways downstream.
     ASSERT(view);
-    view->setWasScrolledByUser(false);
+    if (RefPtr localView = dynamicDowncast<LocalFrameView>(view.get()))
+        localView->setWasScrolledByUser(false);
 
     Ref frame = m_frame.get();
     std::optional<IntRect> previousViewFrameRect = frame->view() ?  frame->view()->frameRect() : std::optional<IntRect>(std::nullopt);
-    frame->setView(view.copyRef());
+    if (RefPtr localView = dynamicDowncast<LocalFrameView>(view.get()))
+        frame->setView(localView.releaseNonNull());
 
     // Use the previous ScrollView's frame rect.
     if (previousViewFrameRect)
@@ -2713,6 +2716,7 @@ void FrameLoader::checkLoadCompleteForThisFrame()
             if (m_frame->isMainFrame()) {
                 tracePoint(MainResourceLoadDidEnd, PAGE_ID);
                 page->didFinishLoad();
+                m_client->loadStorageAccessQuirksIfNeeded();
             }
         }
 
@@ -2938,7 +2942,12 @@ int FrameLoader::numPendingOrLoadingRequests(bool recurse) const
 String FrameLoader::userAgent(const URL& url) const
 {
     String userAgent;
-    if (RefPtr localFrame = dynamicDowncast<LocalFrame>(m_frame->mainFrame())) {
+    if (RefPtr document = m_frame->document()) {
+        if (auto userAgentQuirk = document->quirks().storageAccessUserAgentStringQuirkForDomain(url); !userAgentQuirk.isEmpty())
+            userAgent = userAgentQuirk;
+    }
+
+    if (RefPtr localFrame = dynamicDowncast<LocalFrame>(m_frame->mainFrame()); userAgent.isEmpty() && localFrame) {
         if (RefPtr documentLoader = localFrame->loader().activeDocumentLoader()) {
             if (m_frame->settings().needsSiteSpecificQuirks())
                 userAgent = documentLoader->customUserAgentAsSiteSpecificQuirks();
@@ -3155,8 +3164,10 @@ void FrameLoader::updateRequestAndAddExtraFields(ResourceRequest& request, IsMai
     if (shouldUpdate == ShouldUpdateAppInitiatedValue::Yes && localFrame->loader().documentLoader())
         request.setIsAppInitiated(localFrame->loader().documentLoader()->lastNavigationWasAppInitiated());
 
-    if (page && isMainResource)
-        request.setURL(page->chrome().client().applyLinkDecorationFiltering(request.url(), LinkDecorationFilteringTrigger::Navigation));
+    if (page && isMainResource) {
+        auto [filteredURL, didFilter] = page->chrome().client().applyLinkDecorationFilteringWithResult(request.url(), LinkDecorationFilteringTrigger::Navigation);
+        request.setURL(filteredURL, didFilter == DidFilterLinkDecoration::Yes);
+    }
 }
 
 void FrameLoader::scheduleRefreshIfNeeded(Document& document, const String& content, IsMetaRefresh isMetaRefresh)
@@ -3247,7 +3258,7 @@ void FrameLoader::loadPostRequest(FrameLoadRequest&& request, const String& refe
     workingResourceRequest.setHTTPBody(inRequest.httpBody());
     workingResourceRequest.setHTTPContentType(contentType);
 
-    RefPtr targetFrame = formState || frameName.isEmpty() ? nullptr : findFrameForNavigation(frameName);
+    RefPtr targetFrame = formState || frameName.isEmpty() ? nullptr : dynamicDowncast<LocalFrame>(findFrameForNavigation(frameName));
 
     auto willOpenInNewWindow = !frameName.isEmpty() && !targetFrame ? WillOpenInNewWindow::Yes : WillOpenInNewWindow::No;
     updateRequestAndAddExtraFields(workingResourceRequest, IsMainResource::Yes, loadType, ShouldUpdateAppInitiatedValue::Yes, FrameLoader::IsServiceWorkerNavigationLoad::No, willOpenInNewWindow, &request.requester());
@@ -3439,9 +3450,20 @@ bool FrameLoader::shouldPerformFragmentNavigation(bool isFormSubmission, const S
         && !stateMachine().isDisplayingInitialEmptyDocument();
 }
 
-static bool itemAllowsScrollRestoration(HistoryItem* historyItem)
+static bool itemAllowsScrollRestoration(HistoryItem* historyItem, FrameLoadType loadType)
 {
-    return !historyItem || historyItem->shouldRestoreScrollPosition();
+    if (!historyItem)
+        return true;
+
+    switch (loadType) {
+    case FrameLoadType::Back:
+    case FrameLoadType::Forward:
+    case FrameLoadType::IndexedBackForward:
+        return historyItem->shouldRestoreScrollPosition();
+    default:
+        break;
+    }
+    return true;
 }
 
 static bool isSameDocumentReload(bool isNewNavigation, FrameLoadType loadType)
@@ -3456,14 +3478,13 @@ void FrameLoader::scrollToFragmentWithParentBoundary(const URL& url, bool isNewN
     if (!view || !document)
         return;
 
-    if (isSameDocumentReload(isNewNavigation, m_loadType) || itemAllowsScrollRestoration(history().currentItem())) {
+    if (isSameDocumentReload(isNewNavigation, m_loadType) || itemAllowsScrollRestoration(history().currentItem(), m_loadType)) {
         // https://html.spec.whatwg.org/multipage/browsing-the-web.html#try-to-scroll-to-the-fragment
         if (!document->haveStylesheetsLoaded())
             document->setGotoAnchorNeededAfterStylesheetsLoad(true);
         else
             view->scrollToFragment(url);
     }
-
 }
 
 bool FrameLoader::shouldClose()
@@ -3986,7 +4007,7 @@ bool FrameLoader::shouldTreatURLAsSrcdocDocument(const URL& url) const
     return ownerElement->hasAttributeWithoutSynchronization(srcdocAttr);
 }
 
-RefPtr<LocalFrame> FrameLoader::findFrameForNavigation(const AtomString& name, Document* activeDocument)
+RefPtr<Frame> FrameLoader::findFrameForNavigation(const AtomString& name, Document* activeDocument)
 {
     // FIXME: Eventually all callers should supply the actual activeDocument so we can call canNavigate with the right document.
     if (!activeDocument)
@@ -3999,8 +4020,7 @@ RefPtr<LocalFrame> FrameLoader::findFrameForNavigation(const AtomString& name, D
     if (!activeDocument->canNavigate(dynamicDowncast<LocalFrame>(frame.get())))
         return nullptr;
 
-    // FIXME: <rdar://118363128> This should return a Frame. If a RemoteFrame with the given name exists, we should use that.
-    return dynamicDowncast<LocalFrame>(frame.get());
+    return frame;
 }
 
 void FrameLoader::loadSameDocumentItem(HistoryItem& item)
@@ -4368,7 +4388,7 @@ bool LocalFrameLoaderClient::hasHTMLView() const
     return true;
 }
 
-RefPtr<LocalFrame> createWindow(LocalFrame& openerFrame, LocalFrame& lookupFrame, FrameLoadRequest&& request, WindowFeatures& features, bool& created)
+RefPtr<Frame> createWindow(LocalFrame& openerFrame, LocalFrame& lookupFrame, FrameLoadRequest&& request, WindowFeatures& features, bool& created)
 {
     ASSERT(!features.dialog || request.frameName().isEmpty());
     ASSERT(request.resourceRequest().httpMethod() == "GET"_s);
@@ -4424,12 +4444,12 @@ RefPtr<LocalFrame> createWindow(LocalFrame& openerFrame, LocalFrame& lookupFrame
     if (!page)
         return nullptr;
 
-    RefPtr frame = dynamicDowncast<LocalFrame>(page->mainFrame());
-    if (!frame)
-        return nullptr;
+    Ref frame = page->mainFrame();
 
-    if (isDocumentSandboxed(openerFrame, SandboxPropagatesToAuxiliaryBrowsingContexts))
-        frame->checkedLoader()->forceSandboxFlags(openerFrame.document()->sandboxFlags());
+    if (isDocumentSandboxed(openerFrame, SandboxPropagatesToAuxiliaryBrowsingContexts)) {
+        if (RefPtr localFrame = dynamicDowncast<LocalFrame>(frame))
+            localFrame->checkedLoader()->forceSandboxFlags(openerFrame.document()->sandboxFlags());
+    }
 
     if (!isBlankTargetFrameName(request.frameName()))
         frame->tree().setSpecifiedName(request.frameName());
@@ -4497,7 +4517,8 @@ RefPtr<LocalFrame> createWindow(LocalFrame& openerFrame, LocalFrame& lookupFrame
         arguments.width = *features.width;
     if (features.height && *features.height)
         arguments.height = *features.height;
-    frame->setViewportArguments(arguments);
+    if (RefPtr localFrame = dynamicDowncast<LocalFrame>(frame))
+        localFrame->setViewportArguments(arguments);
 #endif
 
     if (!frame->page())

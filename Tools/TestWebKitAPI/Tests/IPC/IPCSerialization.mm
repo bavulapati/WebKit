@@ -34,10 +34,17 @@
 #import <Foundation/NSValue.h>
 #import <WebCore/FontCocoa.h>
 #import <limits.h>
+#import <pal/spi/cocoa/ContactsSPI.h>
 #import <wtf/RetainPtr.h>
 #import <wtf/cocoa/TypeCastsCocoa.h>
 #import <wtf/spi/cocoa/SecuritySPI.h>
 #import <wtf/text/Base64.h>
+
+#import <pal/cocoa/AVFoundationSoftLink.h>
+#import <pal/cocoa/ContactsSoftLink.h>
+#import <pal/cocoa/DataDetectorsCoreSoftLink.h>
+#import <pal/cocoa/PassKitSoftLink.h>
+#import <pal/mac/DataDetectorsSoftLink.h>
 
 // This test makes it trivial to test round trip encoding and decoding of a particular object type.
 // The primary focus here is Objective-C and similar types - Objects that exist on the platform or in
@@ -146,7 +153,24 @@ struct ObjCHolderForTesting {
         RetainPtr<NSArray>,
         RetainPtr<NSDictionary>,
         RetainPtr<WebCore::CocoaFont>,
-        RetainPtr<NSError>
+        RetainPtr<NSError>,
+        RetainPtr<NSLocale>,
+#if ENABLE(DATA_DETECTION)
+#if PLATFORM(MAC)
+        RetainPtr<WKDDActionContext>,
+#endif
+        RetainPtr<DDScannerResult>,
+#endif
+#if USE(AVFOUNDATION)
+        RetainPtr<AVOutputContext>,
+#endif
+        RetainPtr<NSPersonNameComponents>,
+#if USE(PASSKIT) && !PLATFORM(WATCHOS)
+        RetainPtr<CNPhoneNumber>,
+        RetainPtr<CNPostalAddress>,
+        RetainPtr<PKContact>,
+#endif
+        RetainPtr<NSValue>
     > ValueType;
 
     ValueType value;
@@ -169,6 +193,27 @@ std::optional<ObjCHolderForTesting> ObjCHolderForTesting::decode(IPC::Decoder& d
     } };
 }
 
+#if PLATFORM(MAC)
+inline bool isEqual(WKDDActionContext *a, WKDDActionContext* b)
+{
+    if (![a.authorNameComponents isEqual:b.authorNameComponents])
+        return false;
+    if (!CFEqual(a.mainResult, b.mainResult))
+        return false;
+    if (a.allResults.count != b.allResults.count)
+        return false;
+    for (size_t i = 0; i < a.allResults.count; ++i) {
+        if (!CFEqual((__bridge DDResultRef)a.allResults[i], (__bridge DDResultRef)b.allResults[i]))
+            return false;
+    }
+
+    if (!NSEqualRects(a.highlightFrame, b.highlightFrame))
+        return false;
+
+    return true;
+}
+#endif
+
 inline bool operator==(const ObjCHolderForTesting& a, const ObjCHolderForTesting& b)
 {
     id aObject = a.valueAsID();
@@ -176,6 +221,12 @@ inline bool operator==(const ObjCHolderForTesting& a, const ObjCHolderForTesting
 
     EXPECT_TRUE(aObject != nil);
     EXPECT_TRUE(bObject != nil);
+
+#if PLATFORM(MAC)
+    // DDActionContext doesn't have an isEqual: reliable for our unit testing, so do it ourselves.
+    if ([aObject isKindOfClass:PAL::getWKDDActionContextClass()] && [bObject isKindOfClass:PAL::getWKDDActionContextClass()])
+        return isEqual(aObject, bObject);
+#endif
 
     return [aObject isEqual:bObject];
 }
@@ -341,6 +392,26 @@ static RetainPtr<SecKeyRef> createPrivateKey()
     return privateKey;
 }
 
+static RetainPtr<NSPersonNameComponents> personNameComponentsForTesting()
+{
+    auto phoneticComponents = adoptNS([[NSPersonNameComponents alloc] init]);
+    phoneticComponents.get().familyName = @"Family";
+    phoneticComponents.get().middleName = @"Middle";
+    phoneticComponents.get().namePrefix = @"Doctor";
+    phoneticComponents.get().givenName = @"Given";
+    phoneticComponents.get().nickname = @"Buddy";
+
+    auto components = adoptNS([[NSPersonNameComponents alloc] init]);
+    components.get().familyName = @"Familia";
+    components.get().middleName = @"Median";
+    components.get().namePrefix = @"Physician";
+    components.get().givenName = @"Gifted";
+    components.get().nickname = @"Pal";
+    components.get().phoneticRepresentation = phoneticComponents.get();
+
+    return components;
+}
+
 TEST(IPCSerialization, Basic)
 {
     auto runTestNS = [](ObjCHolderForTesting&& holderArg) {
@@ -403,24 +474,30 @@ TEST(IPCSerialization, Basic)
     auto cgColor = adoptCF(CGColorCreate(sRGBColorSpace.get(), testComponents));
     runTestCF({ cgColor.get() });
 
+    auto runNumberTest = [&](NSNumber *number) {
+        ObjCHolderForTesting::ValueType numberVariant;
+        numberVariant.emplace<RetainPtr<NSNumber>>(number);
+        runTestNS({ numberVariant });
+    };
+
     // NSNumber
-    runTestNS({ [NSNumber numberWithChar: CHAR_MIN] });
-    runTestNS({ [NSNumber numberWithUnsignedChar: CHAR_MAX] });
-    runTestNS({ [NSNumber numberWithShort: SHRT_MIN] });
-    runTestNS({ [NSNumber numberWithUnsignedShort: SHRT_MAX] });
-    runTestNS({ [NSNumber numberWithInt: INT_MIN] });
-    runTestNS({ [NSNumber numberWithUnsignedInt: UINT_MAX] });
-    runTestNS({ [NSNumber numberWithLong: LONG_MIN] });
-    runTestNS({ [NSNumber numberWithUnsignedLong: ULONG_MAX] });
-    runTestNS({ [NSNumber numberWithLongLong: LLONG_MIN] });
-    runTestNS({ [NSNumber numberWithUnsignedLongLong: ULLONG_MAX] });
-    runTestNS({ [NSNumber numberWithFloat: 3.14159] });
-    runTestNS({ [NSNumber numberWithDouble: 9.98989898989] });
-    runTestNS({ [NSNumber numberWithBool: true] });
-    runTestNS({ [NSNumber numberWithBool: false] });
-    runTestNS({ [NSNumber numberWithInteger: NSIntegerMax] });
-    runTestNS({ [NSNumber numberWithInteger: NSIntegerMin] });
-    runTestNS({ [NSNumber numberWithUnsignedInteger: NSUIntegerMax] });
+    runNumberTest([NSNumber numberWithChar: CHAR_MIN]);
+    runNumberTest([NSNumber numberWithUnsignedChar: CHAR_MAX]);
+    runNumberTest([NSNumber numberWithShort: SHRT_MIN]);
+    runNumberTest([NSNumber numberWithUnsignedShort: SHRT_MAX]);
+    runNumberTest([NSNumber numberWithInt: INT_MIN]);
+    runNumberTest([NSNumber numberWithUnsignedInt: UINT_MAX]);
+    runNumberTest([NSNumber numberWithLong: LONG_MIN]);
+    runNumberTest([NSNumber numberWithUnsignedLong: ULONG_MAX]);
+    runNumberTest([NSNumber numberWithLongLong: LLONG_MIN]);
+    runNumberTest([NSNumber numberWithUnsignedLongLong: ULLONG_MAX]);
+    runNumberTest([NSNumber numberWithFloat: 3.14159]);
+    runNumberTest([NSNumber numberWithDouble: 9.98989898989]);
+    runNumberTest([NSNumber numberWithBool: true]);
+    runNumberTest([NSNumber numberWithBool: false]);
+    runNumberTest([NSNumber numberWithInteger: NSIntegerMax]);
+    runNumberTest([NSNumber numberWithInteger: NSIntegerMin]);
+    runNumberTest([NSNumber numberWithUnsignedInteger: NSUIntegerMax]);
 
     // NSArray
     runTestNS({ @[ @"Array test", @1, @{ @"hello": @9 }, @[ @"Another", @3, @"array"], [NSURL URLWithString:@"https://webkit.org/"], [NSData dataWithBytes:"Data test" length:strlen("Data test")] ] });
@@ -505,4 +582,112 @@ TEST(IPCSerialization, Basic)
     RetainPtr<id> error12 = filteredError11.toID();
     EXPECT_EQ([[[error12.get() userInfo] objectForKey:@"NSErrorPeerCertificateChainKey"] count], (NSUInteger)1);
     runTestNS({ (NSError *)error12.get() });
+
+    // NSLocale
+    for (NSString* identifier : [NSLocale availableLocaleIdentifiers])
+        runTestNS({ [NSLocale localeWithLocaleIdentifier: identifier] });
+
+    // NSPersonNameComponents
+    auto components = personNameComponentsForTesting();
+    runTestNS({ components.get().phoneticRepresentation });
+    runTestNS({ components.get() });
+
+#if USE(PASSKIT) && !PLATFORM(WATCHOS)
+    // CNPhoneNumber
+    RetainPtr<CNPhoneNumber> phoneNumber = [PAL::getCNPhoneNumberClass() phoneNumberWithDigits:@"4085551234" countryCode:@"us"];
+    runTestNS({ phoneNumber.get() });
+
+    // CNPostalAddress
+    RetainPtr<CNMutablePostalAddress> address = adoptNS([PAL::getCNMutablePostalAddressClass() new]);
+    address.get().street = @"1 Apple Park Way";
+    address.get().subLocality = @"Birdland";
+    address.get().city = @"Cupertino";
+    address.get().subAdministrativeArea = @"Santa Clara County";
+    address.get().state = @"California";
+    address.get().postalCode = @"95014";
+    address.get().country = @"United States of America";
+    address.get().ISOCountryCode = @"US";
+    address.get().formattedAddress = @"Hello world";
+    runTestNS({ address.get() });
+
+    // PKContact
+    RetainPtr<PKContact> contact = adoptNS([PAL::getPKContactClass() new]);
+    contact.get().name = components.get();
+    contact.get().emailAddress = @"admin@webkit.org";
+    contact.get().phoneNumber = phoneNumber.get();
+    contact.get().postalAddress = address.get();
+ALLOW_DEPRECATED_DECLARATIONS_BEGIN
+    contact.get().supplementarySubLocality = @"City 17";
+ALLOW_DEPRECATED_DECLARATIONS_END
+    runTestNS({ contact.get() });
+#endif // USE(PASSKIT) && !PLATFORM(WATCHOS)
+
+    auto runValueTest = [&](NSValue *value) {
+        ObjCHolderForTesting::ValueType valueVariant;
+        valueVariant.emplace<RetainPtr<NSValue>>(value);
+        runTestNS({ valueVariant });
+    };
+
+    // NSValue, wrapping any of the following classes:
+    //   - NSRange
+    //   - NSRect
+    runValueTest([NSValue valueWithRange:NSMakeRange(1, 2)]);
+    runValueTest([NSValue valueWithRect:NSMakeRect(1, 2, 79, 80)]);
 }
+
+#if PLATFORM(MAC)
+
+static RetainPtr<DDScannerResult> fakeDataDetectorResultForTesting()
+{
+    auto scanner = adoptCF(PAL::softLink_DataDetectorsCore_DDScannerCreate(DDScannerTypeStandard, 0, nullptr));
+    auto stringToScan = CFSTR("webkit.org");
+    auto query = adoptCF(PAL::softLink_DataDetectorsCore_DDScanQueryCreateFromString(kCFAllocatorDefault, stringToScan, CFRangeMake(0, CFStringGetLength(stringToScan))));
+    if (!PAL::softLink_DataDetectorsCore_DDScannerScanQuery(scanner.get(), query.get()))
+        return nil;
+
+    auto results = adoptCF(PAL::softLink_DataDetectorsCore_DDScannerCopyResultsWithOptions(scanner.get(), DDScannerCopyResultsOptionsNoOverlap));
+    if (!CFArrayGetCount(results.get()))
+        return nil;
+
+    return [[PAL::getDDScannerResultClass() resultsFromCoreResults:results.get()] firstObject];
+}
+
+TEST(IPCSerialization, SecureCoding)
+{
+    auto runTestNS = [](ObjCHolderForTesting&& holderArg) {
+        __block bool done = false;
+        __block ObjCHolderForTesting holder = WTFMove(holderArg);
+        auto sender = SerializationTestSender { };
+        sender.sendWithAsyncReplyWithoutUsingIPCConnection(ObjCPingBackMessage(holder), ^(ObjCHolderForTesting&& result) {
+            EXPECT_TRUE(holder == result);
+            done = true;
+        });
+
+        // The completion handler should be called synchronously, so this should be true already.
+        EXPECT_TRUE(done);
+    };
+
+    // DDScannerResult
+    //   - Note: For now, there's no reasonable way to create anything but an empty DDScannerResult object
+    auto scannerResult = fakeDataDetectorResultForTesting();
+    runTestNS({ scannerResult.get() });
+
+    // DDActionContext/DDSecureActionContext
+    auto actionContext = adoptNS([PAL::allocWKDDActionContextInstance() init]);
+    [actionContext setAllResults:@[ (__bridge id)scannerResult.get().coreResult ]];
+    [actionContext setMainResult:scannerResult.get().coreResult];
+    auto components = personNameComponentsForTesting();
+    [actionContext setAuthorNameComponents:components.get()];
+    [actionContext setHighlightFrame:NSMakeRect(1, 2, 3, 4)];
+
+    runTestNS({ actionContext.get() });
+
+    // AVOutputContext
+#if USE(AVFOUNDATION)
+    RetainPtr<AVOutputContext> outputContext = adoptNS([[PAL::getAVOutputContextClass() alloc] init]);
+    runTestNS({ outputContext.get() });
+#endif // USE(AVFOUNDATION)
+}
+
+#endif // PLATFORM(MAC)
+

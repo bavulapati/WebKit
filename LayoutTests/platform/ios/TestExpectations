@@ -133,6 +133,7 @@ fast/events/wheel [ Skip ]
 fast/scrolling/iframe-scrollable-after-back.html [ Skip ]
 fast/scrolling/overflow-scrollable-after-back.html [ Skip ]
 fast/scrolling/programmatic-scroll-to-zero-zero.html [ Skip ]
+http/tests/site-isolation/wheel-event-coordinates.html [ Skip ]
 
 # This test requires alpha-channel video support.
 compositing/video/video-background-color.html [ WontFix ]
@@ -863,6 +864,9 @@ svg/text/select-text-svgfont.html [ Skip ]
 svg/text/selection-doubleclick.svg [ Skip ]
 svg/text/selection-tripleclick.svg [ Skip ]
 imported/w3c/web-platform-tests/css/css-shadow-parts/invalidation-part-pseudo.html [ Skip ]
+
+# No test_driver.click() support for iOS testing
+webkit.org/b/264285 imported/w3c/web-platform-tests/html/semantics/interactive-elements/the-summary-element/interactive-content.html [ Skip ]
 
 # Overscroll-behavior on iOS needs SkyEcho19E179/StarE21E168a: https://bugs.webkit.org/show_bug.cgi?id=235852
 fast/scrolling/sync-scroll-overscroll-behavior-element.html [ Skip ]
@@ -2204,6 +2208,7 @@ accessibility/menu-list-crash2.html [ Pass ]
 accessibility/multiple-attribute-change-crash.html [ Pass ]
 accessibility/node-only-inert-object.html [ Pass ]
 accessibility/node-only-object-element-rect.html [ Pass ]
+accessibility/checkbox-radio-element-rect.html [ Pass ]
 accessibility/out-of-bounds-rowspan.html [ Pass ]
 accessibility/out-of-bounds-rowspan-display-none.html [ Pass ]
 accessibility/out-of-bounds-rowspan-aria-hidden.html [ Pass ]
@@ -2420,10 +2425,6 @@ webkit.org/b/157201 css3/scroll-snap/scroll-snap-drag-scrollbar-thumb-with-stick
 
 # DumpRenderTree doesn't support logging calls to runOpenPanel and iOS's WebKitTestRunner doesn't support eventSender.mouseDown.
 fast/forms/file/open-file-panel.html [ Skip ]
-
-# Tests that are failing after bug 157170 (WPT test sync). These tests may just need rebasing.
-imported/w3c/web-platform-tests/html/semantics/selectors/pseudo-classes/readwrite-readonly.html [ Failure ]
-imported/w3c/web-platform-tests/html/semantics/selectors/pseudo-classes/inrange-outofrange.html [ Failure ]
 
 webkit.org/b/157916 http/tests/misc/slow-loading-animated-image.html [ Pass ImageOnlyFailure ]
 
@@ -4571,6 +4572,7 @@ webkit.org/b/257904 http/tests/site-isolation/basic-iframe.html [ Skip ]
 webkit.org/b/257904 http/tests/site-isolation/double-iframe.html [ Skip ]
 webkit.org/b/257904 http/tests/site-isolation/draw-after-navigation.html [ Skip ]
 webkit.org/b/257904 http/tests/site-isolation/selection-focus.html [ Skip ]
+webkit.org/b/257904 http/tests/site-isolation/basic-iframe-render-output.html [ Failure Timeout Pass ]
 
 # This test can't be enabled on iOS until EventSenderProxyIOS::keyDown() is implemented.
 http/tests/site-isolation/key-events.html [ Skip ]
@@ -4660,3 +4662,5 @@ webkit.org/b/264001 [ Debug ] imported/w3c/web-platform-tests/requestidlecallbac
 webkit.org/b/264177 requestidlecallback/requestidlecallback-deadline-shortened-by-rendering-update.html [ Pass Failure ]
 
 webkit.org/b/264527 imported/w3c/web-platform-tests/css/css-cascade/idlharness.html [ Pass Failure ]
+
+webkit.org/b/266356 imported/w3c/web-platform-tests/video-rvfc/request-video-frame-callback-webrtc.https.html [ Pass Failure ]

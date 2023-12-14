@@ -77,8 +77,9 @@ public:
     // continue even if the style isn't different from the current style.
     void setStyle(RenderStyle&&, StyleDifference minimalStyleDifference = StyleDifference::Equal);
 
-    // The pseudo element style can be cached or uncached.  Use the cached method if the pseudo element doesn't respect
-    // any pseudo classes (and therefore has no concept of changing state).
+    // The pseudo element style can be cached or uncached. Use the uncached method if the pseudo element
+    // has the concept of changing state (like ::-webkit-scrollbar-thumb:hover), or if it takes additional
+    // parameters (like ::highlight(name)).
     const RenderStyle* getCachedPseudoStyle(PseudoId, const RenderStyle* parentStyle = nullptr) const;
     std::unique_ptr<RenderStyle> getUncachedPseudoStyle(const Style::PseudoElementRequest&, const RenderStyle* parentStyle = nullptr, const RenderStyle* ownStyle = nullptr) const;
 
@@ -113,12 +114,15 @@ public:
     bool hasEligibleContainmentForSizeQuery() const;
 
     Color selectionColor(CSSPropertyID) const;
-    std::unique_ptr<RenderStyle> selectionPseudoStyle() const;
+    const RenderStyle* selectionPseudoStyle() const;
 
     // Obtains the selection colors that should be used when painting a selection.
     Color selectionBackgroundColor() const;
     Color selectionForegroundColor() const;
     Color selectionEmphasisMarkColor() const;
+
+    const RenderStyle* spellingErrorPseudoStyle() const;
+    const RenderStyle* grammarErrorPseudoStyle() const;
 
     // FIXME: Make these standalone and move to relevant files.
     bool isRenderLayerModelObject() const;
@@ -170,8 +174,12 @@ public:
     void setStyleInternal(RenderStyle&& style) { m_style = WTFMove(style); }
 
     // Repaint only if our old bounds and new bounds are different. The caller may pass in newBounds and newOutlineBox if they are known.
-    enum class RequiresFullRepaint : bool { No, Yes };
-    bool repaintAfterLayoutIfNeeded(const RenderLayerModelObject* repaintContainer, RequiresFullRepaint, const LayoutRect& oldBounds, const LayoutRect& oldOutlineBox, const LayoutRect* newBoundsPtr = nullptr, const LayoutRect* newOutlineBoxPtr = nullptr);
+    bool repaintAfterLayoutIfNeeded(const RenderLayerModelObject* repaintContainer, RequiresFullRepaint, const RepaintRects& oldRects, const RepaintRects& newRects);
+
+#if ENABLE(LAYER_BASED_SVG_ENGINE)
+    void repaintClientsOfReferencedSVGResources() const;
+    void repaintRendererOrClientsOfReferencedSVGResources() const;
+#endif
 
     bool borderImageIsLoadedAndCanBeRendered() const;
     bool isVisibleIgnoringGeometry() const;
@@ -229,9 +237,6 @@ public:
     bool hasPausedImageAnimations() const { return m_hasPausedImageAnimations; }
     void setHasPausedImageAnimations(bool b) { m_hasPausedImageAnimations = b; }
 
-    void setRenderBoxNeedsLazyRepaint(bool b) { m_renderBoxNeedsLazyRepaint = b; }
-    bool renderBoxNeedsLazyRepaint() const { return m_renderBoxNeedsLazyRepaint; }
-
     bool hasCounterNodeMap() const { return m_hasCounterNodeMap; }
     void setHasCounterNodeMap(bool f) { m_hasCounterNodeMap = f; }
 
@@ -273,7 +278,7 @@ public:
     virtual void suspendAnimations(MonotonicTime = MonotonicTime()) { }
     std::unique_ptr<RenderStyle> animatedStyle();
 
-    WeakPtr<RenderBlockFlow> backdropRenderer() const;
+    SingleThreadWeakPtr<RenderBlockFlow> backdropRenderer() const;
     void setBackdropRenderer(RenderBlockFlow&);
 
     ReferencedSVGResources& ensureReferencedSVGResources();
@@ -397,17 +402,18 @@ private:
     void updateReferencedSVGResources();
     void clearReferencedSVGResources();
 
-    PackedCheckedPtr<RenderObject> m_firstChild;
+    const RenderStyle* textSegmentPseudoStyle(PseudoId) const;
+
+    SingleThreadPackedWeakPtr<RenderObject> m_firstChild;
     unsigned m_baseTypeFlags : 8;
     unsigned m_ancestorLineBoxDirty : 1;
     unsigned m_hasInitializedStyle : 1;
 
-    unsigned m_renderBoxNeedsLazyRepaint : 1;
     unsigned m_hasPausedImageAnimations : 1;
     unsigned m_hasCounterNodeMap : 1;
     unsigned m_hasContinuationChainNode : 1;
 
-    PackedCheckedPtr<RenderObject> m_lastChild;
+    SingleThreadPackedWeakPtr<RenderObject> m_lastChild;
 
     unsigned m_isContinuation : 1;
     unsigned m_isFirstLetter : 1;
@@ -600,7 +606,7 @@ inline RenderElement* RenderObject::parent() const
 
 inline CheckedPtr<RenderElement> RenderObject::checkedParent() const
 {
-    return m_parent;
+    return m_parent.get();
 }
 
 } // namespace WebCore

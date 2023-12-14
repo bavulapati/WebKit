@@ -96,10 +96,12 @@ class PseudoElementRequest;
 }
 
 enum class RepaintRectCalculation : bool { Fast, Accurate };
+enum class RepaintOutlineBounds : bool { No, Yes };
+enum class RequiresFullRepaint : bool { No, Yes };
 
 // Base class for all rendering tree objects.
 class RenderObject : public CachedImageClient, public CanMakeCheckedPtr {
-    WTF_MAKE_ISO_ALLOCATED(RenderObject);
+    WTF_MAKE_COMPACT_ISO_ALLOCATED(RenderObject);
     friend class RenderBlock;
     friend class RenderBlockFlow;
     friend class RenderBox;
@@ -214,6 +216,7 @@ public:
         LegacySVGPath,
         LegacySVGRect,
         LegacySVGResourceClipper,
+        LegacySVGResourceMasker,
         LegacySVGRoot,
         LegacySVGTransformableContainer,
         LegacySVGViewportContainer
@@ -469,11 +472,14 @@ public:
     bool isLegacyRenderSVGForeignObject() const { return type() == Type::LegacySVGForeignObject; }
     bool isRenderSVGForeignObject() const { return type() == Type::SVGForeignObject; }
     virtual bool isLegacyRenderSVGResourceContainer() const { return false; }
-    bool isRenderSVGResourceContainer() const { return type() == Type::SVGResourceClipper; }
+    bool isRenderSVGResourceContainer() const { return type() == Type::SVGResourceClipper || type() == Type::SVGResourceMasker; }
     bool isRenderSVGResourceFilter() const { return type() == Type::SVGResourceFilter; }
     bool isLegacyRenderSVGResourceClipper() const { return type() == Type::LegacySVGResourceClipper; }
+    bool isLegacyRenderSVGResourceMarker() const { return type() == Type::SVGResourceMarker; }
+    bool isLegacyRenderSVGResourceMasker() const { return type() == Type::LegacySVGResourceMasker; }
     bool isRenderSVGResourceClipper() const { return type() == Type::SVGResourceClipper; }
     bool isRenderSVGResourceFilterPrimitive() const { return type() == Type::SVGResourceFilterPrimitive; }
+    bool isRenderSVGResourceMasker() const { return type() == Type::SVGResourceMasker; }
     bool isRenderOrLegacyRenderSVGRoot() const { return isRenderSVGRoot() || isLegacyRenderSVGRoot(); }
     bool isRenderOrLegacyRenderSVGShape() const { return isRenderSVGShape() || isLegacyRenderSVGShape(); }
     bool isRenderOrLegacyRenderSVGPath() const { return isRenderSVGPath() || isLegacyRenderSVGPath(); }
@@ -795,11 +801,11 @@ public:
     void repaintSlowRepaintObject() const;
 
     enum class VisibleRectContextOption {
-        UseEdgeInclusiveIntersection = 1 << 0,
-        ApplyCompositedClips = 1 << 1,
-        ApplyCompositedContainerScrolls  = 1 << 2,
-        ApplyContainerClip = 1 << 3,
-        CalculateAccurateRepaintRect = 1 << 4,
+        UseEdgeInclusiveIntersection        = 1 << 0,
+        ApplyCompositedClips                = 1 << 1,
+        ApplyCompositedContainerScrolls     = 1 << 2,
+        ApplyContainerClip                  = 1 << 3,
+        CalculateAccurateRepaintRect        = 1 << 4,
     };
     struct VisibleRectContext {
         VisibleRectContext(bool hasPositionFixedDescendant = false, bool dirtyRectIsFlipped = false, OptionSet<VisibleRectContextOption> options = { })
@@ -820,30 +826,110 @@ public:
         OptionSet<VisibleRectContextOption> options;
     };
 
+    struct RepaintRects {
+        LayoutRect clippedOverflowRect; // Some rect (normally the visual overflow rect) mapped up to the repaint container, respecting clipping.
+        std::optional<LayoutRect> outlineBoundsRect; // A rect repsenting the extent of outlines and shadows, mapped to the repaint container, but not clipped.
+
+        RepaintRects(LayoutRect rect = { }, const std::optional<LayoutRect>& outlineBounds = { })
+            : clippedOverflowRect(rect)
+            , outlineBoundsRect(outlineBounds)
+        { }
+
+        bool operator==(const RepaintRects&) const = default;
+
+        void move(LayoutSize size)
+        {
+            clippedOverflowRect.move(size);
+            if (outlineBoundsRect)
+                outlineBoundsRect->move(size);
+        }
+
+        void moveBy(LayoutPoint size)
+        {
+            clippedOverflowRect.moveBy(size);
+            if (outlineBoundsRect)
+                outlineBoundsRect->moveBy(size);
+        }
+
+        void expand(LayoutSize size)
+        {
+            clippedOverflowRect.expand(size);
+            if (outlineBoundsRect)
+                outlineBoundsRect->expand(size);
+        }
+
+        void encloseToIntRects()
+        {
+            clippedOverflowRect = enclosingIntRect(clippedOverflowRect);
+            if (outlineBoundsRect)
+                *outlineBoundsRect = enclosingIntRect(*outlineBoundsRect);
+        }
+
+        void unite(const RepaintRects& other)
+        {
+            clippedOverflowRect.unite(other.clippedOverflowRect);
+            if (outlineBoundsRect && other.outlineBoundsRect)
+                outlineBoundsRect->unite(*other.outlineBoundsRect);
+        }
+
+        void flipForWritingMode(LayoutSize containerSize, bool isHorizontalWritingMode)
+        {
+            if (isHorizontalWritingMode) {
+                clippedOverflowRect.setY(containerSize.height() - clippedOverflowRect.maxY());
+                if (outlineBoundsRect)
+                    outlineBoundsRect->setY(containerSize.height() - outlineBoundsRect->maxY());
+            } else {
+                clippedOverflowRect.setX(containerSize.width() - clippedOverflowRect.maxX());
+                if (outlineBoundsRect)
+                    outlineBoundsRect->setX(containerSize.width() - outlineBoundsRect->maxX());
+            }
+        }
+
+        // Returns true if intersecting (clippedOverflowRect remains non-empty).
+        bool intersect(LayoutRect clipRect)
+        {
+            // Note the we only intersect clippedOverflowRect.
+            clippedOverflowRect.intersect(clipRect);
+            return !clippedOverflowRect.isEmpty();
+        }
+
+        // Returns true if intersecting (clippedOverflowRect remains non-empty).
+        bool edgeInclusiveIntersect(LayoutRect clipRect)
+        {
+            // Note the we only intersect clippedOverflowRect.
+            return clippedOverflowRect.edgeInclusiveIntersect(clipRect);
+        }
+
+        void transform(const TransformationMatrix&);
+        void transform(const TransformationMatrix&, float deviceScaleFactor);
+    };
+
     // Returns the rect that should be repainted whenever this object changes. The rect is in the view's
     // coordinate space. This method deals with outlines and overflow.
     LayoutRect absoluteClippedOverflowRectForRepaint() const { return clippedOverflowRect(nullptr, visibleRectContextForRepaint()); }
     LayoutRect absoluteClippedOverflowRectForSpatialNavigation() const { return clippedOverflowRect(nullptr, visibleRectContextForSpatialNavigation()); }
     LayoutRect absoluteClippedOverflowRectForRenderTreeAsText() const { return clippedOverflowRect(nullptr, visibleRectContextForRenderTreeAsText()); }
+
     WEBCORE_EXPORT IntRect pixelSnappedAbsoluteClippedOverflowRect() const;
+
     virtual LayoutRect clippedOverflowRect(const RenderLayerModelObject* repaintContainer, VisibleRectContext) const;
     LayoutRect clippedOverflowRectForRepaint(const RenderLayerModelObject* repaintContainer) const { return clippedOverflowRect(repaintContainer, visibleRectContextForRepaint()); }
     virtual LayoutRect rectWithOutlineForRepaint(const RenderLayerModelObject* repaintContainer, LayoutUnit outlineWidth) const;
-    virtual LayoutRect outlineBoundsForRepaint(const RenderLayerModelObject* /*repaintContainer*/, const RenderGeometryMap* = nullptr) const { return LayoutRect(); }
+    virtual LayoutRect outlineBoundsForRepaint(const RenderLayerModelObject* /*repaintContainer*/, const RenderGeometryMap* = nullptr) const { return { }; }
 
-    // Given a rect in the object's coordinate space, compute a rect suitable for repainting
-    // that rect in view coordinates.
-    LayoutRect computeAbsoluteRepaintRect(const LayoutRect& rect) const { return computeRect(rect, nullptr, visibleRectContextForRepaint()); }
     // Given a rect in the object's coordinate space, compute a rect  in the coordinate space
     // of repaintContainer suitable for the given VisibleRectContext.
-    LayoutRect computeRect(const LayoutRect&, const RenderLayerModelObject* repaintContainer, VisibleRectContext) const;
-    virtual LayoutRect computeRectForRepaint(const LayoutRect& rect, const RenderLayerModelObject* repaintContainer) const { return computeRect(rect, repaintContainer, visibleRectContextForRepaint()); }
+    RepaintRects computeRects(const RepaintRects&, const RenderLayerModelObject* repaintContainer, VisibleRectContext) const;
+
+    LayoutRect computeRectForRepaint(const LayoutRect& rect, const RenderLayerModelObject* repaintContainer) const { return computeRects({ rect }, repaintContainer, visibleRectContextForRepaint()).clippedOverflowRect; }
     FloatRect computeFloatRectForRepaint(const FloatRect&, const RenderLayerModelObject* repaintContainer) const;
+
+    virtual RepaintRects rectsForRepaintingAfterLayout(const RenderLayerModelObject* repaintContainer, RepaintOutlineBounds) const;
 
     // Given a rect in the object's coordinate space, compute the location in container space where this rect is visible,
     // when clipping and scrolling as specified by the context. When using edge-inclusive intersection, return std::nullopt
     // rather than an empty rect if the rect is completely clipped out in container space.
-    virtual std::optional<LayoutRect> computeVisibleRectInContainer(const LayoutRect&, const RenderLayerModelObject* repaintContainer, VisibleRectContext) const;
+    virtual std::optional<RepaintRects> computeVisibleRectsInContainer(const RepaintRects&, const RenderLayerModelObject* repaintContainer, VisibleRectContext) const;
     virtual std::optional<FloatRect> computeFloatVisibleRectInContainer(const FloatRect&, const RenderLayerModelObject* repaintContainer, VisibleRectContext) const;
 
     WEBCORE_EXPORT bool hasNonEmptyVisibleRectRespectingParentFrames() const;
@@ -948,8 +1034,6 @@ protected:
     //////////////////////////////////////////
     Node& nodeForNonAnonymous() const { ASSERT(!isAnonymous()); return m_node.get(); }
 
-    void adjustRectForOutlineAndShadow(LayoutRect&) const;
-
     virtual void willBeDestroyed();
 
     void setNeedsPositionedMovementLayoutBit(bool b) { m_bitfields.setNeedsPositionedMovementLayout(b); }
@@ -970,6 +1054,8 @@ protected:
     void issueRepaint(std::optional<LayoutRect> partialRepaintRect = std::nullopt, ClipRepaintToLayer = ClipRepaintToLayer::No, ForceRepaint = ForceRepaint::No, std::optional<LayoutBoxExtent> additionalRepaintOutsets = std::nullopt) const;
 
 private:
+    virtual RepaintRects localRectsForRepaint(RepaintOutlineBounds) const;
+
     void addAbsoluteRectForLayer(LayoutRect& result);
     void setLayerNeedsFullRepaint();
     void setLayerNeedsFullRepaintForPositionedMovementLayout();
@@ -1119,9 +1205,9 @@ private:
 
     CheckedRef<Node> m_node;
 
-    CheckedPtr<RenderElement> m_parent;
-    CheckedPtr<RenderObject> m_previous;
-    PackedCheckedPtr<RenderObject> m_next;
+    SingleThreadWeakPtr<RenderElement> m_parent;
+    SingleThreadWeakPtr<RenderObject> m_previous;
+    SingleThreadPackedWeakPtr<RenderObject> m_next;
     Type m_type;
 
     CheckedPtr<Layout::Box> m_layoutBox;
@@ -1144,7 +1230,7 @@ private:
 
         // From RenderElement
         std::unique_ptr<ReferencedSVGResources> referencedSVGResources;
-        WeakPtr<RenderBlockFlow> backdropRenderer;
+        SingleThreadWeakPtr<RenderBlockFlow> backdropRenderer;
 
         // From RenderBox
         RefPtr<ControlPart> controlPart;

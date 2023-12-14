@@ -241,7 +241,7 @@ macro doVMEntry(makeCall)
     checkStackPointerAlignment(t4, 0xbad0dc01)
 
     storep vm, VMEntryRecord::m_vm[sp]
-    if ARM64 or ARM64E
+    if (ARM64 or ARM64E) and ADDRESS64
         loadpairq VM::topCallFrame[vm], t4, t3
         storepairq t4, t3, VMEntryRecord::m_prevTopCallFrame[sp]
     else
@@ -250,8 +250,6 @@ macro doVMEntry(makeCall)
         loadp VM::topEntryFrame[vm], t4
         storep t4, VMEntryRecord::m_prevTopEntryFrame[sp]
     end
-    loadp ProtoCallFrame::calleeValue[protoCallFrame], t4
-    storep t4, VMEntryRecord::m_callee[sp]
 
     loadi ProtoCallFrame::paddedArgCount[protoCallFrame], t4
     addp CallFrameHeaderSlots, t4, t4
@@ -326,7 +324,12 @@ macro doVMEntry(makeCall)
 .copyArgsDone:
     if ARM64 or ARM64E
         move sp, t4
-        storepairq t4, cfr, VM::topCallFrame[vm]
+        if ADDRESS64
+            storepairq t4, cfr, VM::topCallFrame[vm]
+        else
+            storep t4, VM::topCallFrame[vm]
+            storep cfr, VM::topEntryFrame[vm]
+        end
     else
         storep sp, VM::topCallFrame[vm]
         storep cfr, VM::topEntryFrame[vm]
@@ -344,7 +347,7 @@ macro doVMEntry(makeCall)
     vmEntryRecord(cfr, t4)
 
     loadp VMEntryRecord::m_vm[t4], vm
-    if ARM64 or ARM64E
+    if (ARM64 or ARM64E) and ADDRESS64
         loadpairq VMEntryRecord::m_prevTopCallFrame[t4], t4, t2
         storepairq t4, t2, VM::topCallFrame[vm]
     else

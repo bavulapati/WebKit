@@ -68,6 +68,7 @@
 #include "ImageBuffer.h"
 #include "InspectorInstrumentation.h"
 #include "JSNode.h"
+#include "JSServiceWorkerGlobalScope.h"
 #include "JSWindowProxy.h"
 #include "LocalDOMWindow.h"
 #include "LocalFrameLoaderClient.h"
@@ -92,6 +93,7 @@
 #include "ScriptController.h"
 #include "ScriptSourceCode.h"
 #include "ScrollingCoordinator.h"
+#include "ServiceWorkerGlobalScope.h"
 #include "Settings.h"
 #include "StyleProperties.h"
 #include "StyleScope.h"
@@ -115,11 +117,6 @@
 
 #if ENABLE(DATA_DETECTION)
 #include "DataDetectionResultsStorage.h"
-#endif
-
-#if ENABLE(SERVICE_WORKER)
-#include "JSServiceWorkerGlobalScope.h"
-#include "ServiceWorkerGlobalScope.h"
 #endif
 
 #define FRAME_RELEASE_LOG_ERROR(channel, fmt, ...) RELEASE_LOG_ERROR(channel, "%p - Frame::" fmt, this, ##__VA_ARGS__)
@@ -161,7 +158,7 @@ LocalFrame::LocalFrame(Page& page, UniqueRef<LocalFrameLoaderClient>&& frameLoad
     ProcessWarming::initializeNames();
     StaticCSSValuePool::init();
 
-    if (auto* localMainFrame = dynamicDowncast<LocalFrame>(mainFrame()); localMainFrame && ownerElement)
+    if (auto* localMainFrame = dynamicDowncast<LocalFrame>(mainFrame()); localMainFrame && parent)
         localMainFrame->selfOnlyRef();
 
 #ifndef NDEBUG
@@ -331,6 +328,10 @@ void LocalFrame::setDocument(RefPtr<Document>&& newDocument)
         checkedPage()->mainFrameDidChangeToNonInitialEmptyDocument();
 
     InspectorInstrumentation::frameDocumentUpdated(*this);
+
+#if ENABLE(WINDOW_PROXY_PROPERTY_ACCESS_NOTIFICATION)
+    m_accessedWindowProxyPropertiesViaOpener = { };
+#endif
 
     m_documentIsBeingReplaced = false;
 }
@@ -760,21 +761,6 @@ RenderView* LocalFrame::contentRenderer() const
     return document() ? document()->renderView() : nullptr;
 }
 
-RenderWidget* LocalFrame::ownerRenderer() const
-{
-    RefPtr ownerElement = this->ownerElement();
-    if (!ownerElement)
-        return nullptr;
-    auto* object = ownerElement->renderer();
-    // FIXME: If <object> is ever fixed to disassociate itself from frames
-    // that it has started but canceled, then this can turn into an ASSERT
-    // since ownerElement would be nullptr when the load is canceled.
-    // https://bugs.webkit.org/show_bug.cgi?id=18585
-    if (!is<RenderWidget>(object))
-        return nullptr;
-    return downcast<RenderWidget>(object);
-}
-
 LocalFrame* LocalFrame::frameForWidget(const Widget& widget)
 {
     if (auto* renderer = RenderWidget::find(widget))
@@ -969,6 +955,11 @@ DOMWindow* LocalFrame::virtualWindow() const
 void LocalFrame::disconnectView()
 {
     setView(nullptr);
+}
+
+void LocalFrame::setOpener(Frame* opener)
+{
+    loader().setOpener(opener);
 }
 
 const Frame* LocalFrame::opener() const
@@ -1195,11 +1186,6 @@ TextStream& operator<<(TextStream& ts, const LocalFrame& frame)
     return ts;
 }
 
-bool LocalFrame::arePluginsEnabled()
-{
-    return settings().arePluginsEnabled();
-}
-
 void LocalFrame::resetScript()
 {
     resetWindowProxy();
@@ -1211,10 +1197,8 @@ LocalFrame* LocalFrame::fromJSContext(JSContextRef context)
     JSC::JSGlobalObject* globalObjectObj = toJS(context);
     if (auto* window = JSC::jsDynamicCast<JSLocalDOMWindow*>(globalObjectObj))
         return window->wrapped().frame();
-#if ENABLE(SERVICE_WORKER)
     if (auto* serviceWorkerGlobalScope = JSC::jsDynamicCast<JSServiceWorkerGlobalScope*>(globalObjectObj))
         return serviceWorkerGlobalScope->wrapped().serviceWorkerPage() ? dynamicDowncast<LocalFrame>(serviceWorkerGlobalScope->wrapped().serviceWorkerPage()->mainFrame()) : nullptr;
-#endif
     return nullptr;
 }
 
@@ -1275,6 +1259,27 @@ void LocalFrame::frameWasDisconnectedFromOwner() const
 
     protectedDocument()->detachFromFrame();
 }
+
+#if ENABLE(WINDOW_PROXY_PROPERTY_ACCESS_NOTIFICATION)
+
+void LocalFrame::didAccessWindowProxyPropertyViaOpener(WindowProxyProperty property)
+{
+    if (m_accessedWindowProxyPropertiesViaOpener.contains(property))
+        return;
+    m_accessedWindowProxyPropertiesViaOpener.add(property);
+
+    RefPtr parentWindow { opener() ? opener()->window() : nullptr };
+    if (!parentWindow)
+        return;
+
+    auto parentOrigin = SecurityOriginData::fromURL(parentWindow->location().url());
+    if (parentOrigin.isNull() || parentOrigin.isOpaque())
+        return;
+
+    checkedLoader()->client().didAccessWindowProxyPropertyViaOpener(WTFMove(parentOrigin), property);
+}
+
+#endif
 
 } // namespace WebCore
 

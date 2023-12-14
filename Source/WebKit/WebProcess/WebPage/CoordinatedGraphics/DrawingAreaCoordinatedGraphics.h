@@ -66,6 +66,10 @@ private:
     bool enterAcceleratedCompositingModeIfNeeded() override;
 #endif
 
+#if PLATFORM(WPE) && USE(GBM) && ENABLE(WPE_PLATFORM)
+    void preferredBufferFormatsDidChange() override;
+#endif
+
     bool supportsAsyncScrolling() const override;
     void registerScrollingTree() override;
     void unregisterScrollingTree() override;

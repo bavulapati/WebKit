@@ -32,6 +32,7 @@
 #include "JITOperationValidation.h"
 #include <wtf/MathExtras.h>
 #include <wtf/StdLibExtras.h>
+#include <wtf/TZoneMalloc.h>
 
 namespace JSC {
 
@@ -39,6 +40,7 @@ using Assembler = TARGET_ASSEMBLER;
 class Reg;
 
 class MacroAssemblerARM64 : public AbstractMacroAssembler<Assembler> {
+    WTF_MAKE_TZONE_ALLOCATED(MacroAssemblerARM64);
 public:
     static constexpr unsigned numGPRs = 32;
     static constexpr unsigned numFPRs = 32;
@@ -87,7 +89,6 @@ public:
 
     Vector<LinkRecord, 0, UnsafeVectorOverflow>& jumpsToLink() { return m_assembler.jumpsToLink(); }
     static bool canCompact(JumpType jumpType) { return Assembler::canCompact(jumpType); }
-    static JumpLinkType computeJumpType(JumpType jumpType, const uint8_t* from, const uint8_t* to) { return Assembler::computeJumpType(jumpType, from, to); }
     static JumpLinkType computeJumpType(LinkRecord& record, const uint8_t* from, const uint8_t* to) { return Assembler::computeJumpType(record, from, to); }
     static int jumpSizeDelta(JumpType jumpType, JumpLinkType jumpLinkType) { return Assembler::jumpSizeDelta(jumpType, jumpLinkType); }
 
@@ -4399,11 +4400,12 @@ public:
     ALWAYS_INLINE Call call(RegisterID target, RegisterID callTag) { return UNUSED_PARAM(callTag), call(target, NoPtrTag); }
     ALWAYS_INLINE Call call(Address address, RegisterID callTag) { return UNUSED_PARAM(callTag), call(address, NoPtrTag); }
 
-    ALWAYS_INLINE void callOperation(const CodePtr<OperationPtrTag> operation)
+    template<PtrTag tag>
+    ALWAYS_INLINE void callOperation(const CodePtr<tag> operation)
     {
         auto tmp = getCachedDataTempRegisterIDAndInvalidate();
         move(TrustedImmPtr(operation.taggedPtr()), tmp);
-        call(tmp, OperationPtrTag);
+        call(tmp, tag);
     }
 
     ALWAYS_INLINE Jump jump()

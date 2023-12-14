@@ -25,7 +25,6 @@
 #include "RenderReplaced.h"
 
 #include "BackgroundPainter.h"
-#include "DeprecatedGlobalSettings.h"
 #include "DocumentInlines.h"
 #include "DocumentMarkerController.h"
 #include "ElementRuleCollector.h"
@@ -177,7 +176,7 @@ Color RenderReplaced::calculateHighlightColor() const
         }
     }
 #endif
-    if (DeprecatedGlobalSettings::highlightAPIEnabled()) {
+    if (document().settings().highlightAPIEnabled()) {
         if (auto highlightRegistry = document().highlightRegistryIfExists()) {
             for (auto& highlight : highlightRegistry->map()) {
                 for (auto& highlightRange : highlight.value->highlightRanges()) {
@@ -241,7 +240,7 @@ void RenderReplaced::paint(PaintInfo& paintInfo, const LayoutPoint& paintOffset)
     if (element() && element()->parentOrShadowHostElement()) {
         auto* parentContainer = element()->parentOrShadowHostElement();
         ASSERT(parentContainer);
-        if (draggedContentContainsReplacedElement(document().markers().markersFor(*parentContainer, DocumentMarker::DraggedContent), *element())) {
+        if (draggedContentContainsReplacedElement(document().markers().markersFor(*parentContainer, DocumentMarker::Type::DraggedContent), *element())) {
             savedGraphicsContext.save();
             paintInfo.context().setAlpha(0.25);
         }
@@ -818,18 +817,24 @@ bool RenderReplaced::isHighlighted(HighlightState state, const RenderHighlight& 
     return false;
 }
 
-LayoutRect RenderReplaced::clippedOverflowRect(const RenderLayerModelObject* repaintContainer, VisibleRectContext context) const
+auto RenderReplaced::localRectsForRepaint(RepaintOutlineBounds repaintOutlineBounds) const -> RepaintRects
 {
     if (isInsideEntirelyHiddenLayer())
         return { };
 
     // The selectionRect can project outside of the overflowRect, so take their union
     // for repainting to avoid selection painting glitches.
-    LayoutRect r = unionRect(localSelectionRect(false), visualOverflowRect());
+    auto overflowRect = unionRect(localSelectionRect(false), visualOverflowRect());
+
     // FIXME: layoutDelta needs to be applied in parts before/after transforms and
     // repaint containers. https://bugs.webkit.org/show_bug.cgi?id=23308
-    r.move(view().frameView().layoutContext().layoutDelta());
-    return computeRect(r, repaintContainer, context);
+    overflowRect.move(view().frameView().layoutContext().layoutDelta());
+
+    auto rects = RepaintRects { overflowRect };
+    if (repaintOutlineBounds == RepaintOutlineBounds::Yes)
+        rects.outlineBoundsRect = localOutlineBoundsRepaintRect();
+
+    return rects;
 }
 
 bool RenderReplaced::isContentLikelyVisibleInViewport()

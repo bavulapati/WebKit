@@ -58,7 +58,7 @@ namespace WebCore {
 
 WTF_MAKE_ISO_ALLOCATED_IMPL(EventTarget);
 
-struct SameSizeAsEventTarget : ScriptWrappable, CanMakeWeakPtr<EventTarget, WeakPtrFactoryInitialization::Lazy, WeakPtrImplWithEventTargetData>, CanMakeCheckedPtr {
+struct SameSizeAsEventTarget : ScriptWrappable, CanMakeWeakPtrWithBitField<EventTarget, WeakPtrFactoryInitialization::Lazy, WeakPtrImplWithEventTargetData> {
     virtual ~SameSizeAsEventTarget() = default; // Allocate vtable pointer.
 };
 
@@ -92,7 +92,7 @@ bool EventTarget::addEventListener(const AtomString& eventType, Ref<EventListene
 
     auto passive = options.passive;
 
-    if (!passive.has_value() && Quirks::shouldMakeEventListenerPassive(*this, eventType, listener.get()))
+    if (!passive.has_value() && Quirks::shouldMakeEventListenerPassive(*this, eventType))
         passive = true;
 
     bool listenerCreatedFromScript = [&] {

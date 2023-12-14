@@ -32,7 +32,7 @@
 #include <wtf/Ref.h>
 #include <wtf/ThreadSafeRefCounted.h>
 #include <wtf/UniqueRef.h>
-#include <wtf/WeakPtr.h>
+#include <wtf/WeakRef.h>
 
 namespace WebCore {
 
@@ -42,11 +42,12 @@ class FrameLoadRequest;
 class HTMLFrameOwnerElement;
 class NavigationScheduler;
 class Page;
+class RenderWidget;
 class Settings;
 class WeakPtrImplWithEventTargetData;
 class WindowProxy;
 
-class Frame : public ThreadSafeRefCounted<Frame, WTF::DestructionThread::Main>, public CanMakeWeakPtr<Frame>, public CanMakeCheckedPtr {
+class Frame : public ThreadSafeRefCounted<Frame, WTF::DestructionThread::Main>, public CanMakeWeakPtr<Frame> {
 public:
     virtual ~Frame();
 
@@ -86,8 +87,13 @@ public:
 
     virtual FrameView* virtualView() const = 0;
     virtual void disconnectView() = 0;
+    virtual void setOpener(Frame*) = 0;
     virtual const Frame* opener() const = 0;
     virtual Frame* opener() = 0;
+
+    WEBCORE_EXPORT RenderWidget* ownerRenderer() const; // Renderer for the element that contains this frame.
+
+    WEBCORE_EXPORT bool arePluginsEnabled();
 
 protected:
     Frame(Page&, FrameIdentifier, FrameType, HTMLFrameOwnerElement*, Frame* parent);
@@ -103,7 +109,7 @@ private:
     mutable FrameTree m_treeNode;
     Ref<WindowProxy> m_windowProxy;
     WeakPtr<HTMLFrameOwnerElement, WeakPtrImplWithEventTargetData> m_ownerElement;
-    CheckedRef<Frame> m_mainFrame;
+    WeakRef<Frame> m_mainFrame;
     const Ref<Settings> m_settings;
     FrameType m_frameType;
     mutable UniqueRef<NavigationScheduler> m_navigationScheduler;

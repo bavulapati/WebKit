@@ -128,6 +128,16 @@ public:
         Command = 1 << 20
     };
 
+    static constexpr OptionSet<ModifierFlags> allModifierFlags()
+    {
+        return {
+            ModifierFlags::Shift,
+            ModifierFlags::Control,
+            ModifierFlags::Option,
+            ModifierFlags::Command
+        };
+    }
+
     struct CommandData {
         String identifier;
         String description;
@@ -140,6 +150,8 @@ public:
         MatchPatternSet excludeMatchPatterns;
 
         InjectionTime injectionTime = InjectionTime::DocumentIdle;
+
+        String identifier { ""_s };
 
         bool matchesAboutBlank { false };
         bool injectsIntoAllFrames { false };
@@ -242,7 +254,7 @@ public:
     const CommandsVector& commands();
     bool hasCommands();
 
-    const DeclarativeNetRequestRulesetVector& declarativeNetRequestRulesets();
+    DeclarativeNetRequestRulesetVector& declarativeNetRequestRulesets();
     bool hasContentModificationRules() { return !declarativeNetRequestRulesets().isEmpty(); }
 
     const InjectedContentVector& staticInjectedContents();

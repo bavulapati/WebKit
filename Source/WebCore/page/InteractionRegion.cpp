@@ -194,14 +194,10 @@ std::optional<InteractionRegion> interactionRegionForRenderedRegion(RenderObject
     if (bounds.isEmpty())
         return std::nullopt;
 
-    auto* localFrame = dynamicDowncast<LocalFrame>(regionRenderer.document().frame()->mainFrame());
-    if (!localFrame)
-        return std::nullopt;
+    Ref mainFrameView = *regionRenderer.document().frame()->mainFrame().virtualView();
 
-    auto& mainFrameView = *localFrame->view();
-
-    FloatSize frameViewSize = mainFrameView.size();
-    auto scale = 1 / mainFrameView.visibleContentScaleFactor();
+    FloatSize frameViewSize = mainFrameView->size();
+    auto scale = 1 / mainFrameView->visibleContentScaleFactor();
     frameViewSize.scale(scale, scale);
     auto frameViewArea = frameViewSize.area();
 
@@ -221,11 +217,14 @@ std::optional<InteractionRegion> interactionRegionForRenderedRegion(RenderObject
 
     bool isLabelable = is<HTMLElement>(matchedElement) && downcast<HTMLElement>(matchedElement)->isLabelable();
     for (Node* node = matchedElement; node; node = node->parentInComposedTree()) {
-        bool matchedButton = is<HTMLButtonElement>(node);
-        bool matchedLabel = isLabelable && is<HTMLLabelElement>(node);
-        bool matchedLink = node->isLink();
+        auto* element = dynamicDowncast<Element>(node);
+        if (!element)
+            continue;
+        bool matchedButton = is<HTMLButtonElement>(*element);
+        bool matchedLabel = isLabelable && is<HTMLLabelElement>(*element);
+        bool matchedLink = element->isLink();
         if (matchedButton || matchedLabel || matchedLink) {
-            matchedElement = downcast<Element>(node);
+            matchedElement = element;
             break;
         }
     }
@@ -311,7 +310,16 @@ std::optional<InteractionRegion> interactionRegionForRenderedRegion(RenderObject
         }
     }
 
-    if (!regionRenderer.hasVisibleBoxDecorations() && !renderer.hasVisibleBoxDecorations() && !renderer.style().hasExplicitlySetBorderRadius()) {
+    auto& style = regionRenderer.style();
+    bool canTweakShape = !style.hasBackground()
+        && !style.hasOutline()
+        && !style.boxShadow()
+        && !style.hasExplicitlySetBorderRadius()
+        // No visible borders or borders that do not create a complete box.
+        && (!style.hasVisibleBorder()
+            || !(style.borderTopWidth() && style.borderRightWidth() && style.borderBottomWidth() && style.borderLeftWidth()));
+
+    if (canTweakShape) {
         // We can safely tweak the bounds and radius without causing visual mismatch.
         borderRadius = std::max<float>(borderRadius, regionRenderer.document().settings().interactionRegionMinimumCornerRadius());
         if (isInlineNonBlock)
