@@ -226,6 +226,7 @@ if (NOT HAS_RUN_WEBKIT_COMMON)
     include(WebKitCompilerFlags)
     include(WebKitStaticAnalysis)
     include(WebKitFeatures)
+    include(WebKitFindPackage)
 
     include(OptionsCommon)
     include(Options${PORT})
