@@ -155,11 +155,6 @@ if (LOWERCASE_EVENT_LOOP_TYPE STREQUAL "glib")
         ${GLIB_GOBJECT_LIBRARIES}
         ${GLIB_LIBRARIES}
     )
-elseif (LOWERCASE_EVENT_LOOP_TYPE STREQUAL "windows")
-    list(APPEND WTF_SOURCES
-        win/RunLoopWin.cpp
-        win/Win32Handle.cpp
-    )
 else ()
     list(APPEND WTF_SOURCES
         generic/RunLoopGeneric.cpp
