@@ -2,7 +2,7 @@ if(WIN32)
     set(PORT Win)
 
     # Use Release DLL CRT even for Debug build
-    set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreadedDLL)
+    # set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreadedDLL)
 
     if (MSVC)
         include(OptionsMSVC)
@@ -99,7 +99,12 @@ if(WIN32)
     set(CMAKE_DISABLE_PRECOMPILE_HEADERS OFF)
 
     set(ICU_DEBUG ON)
-    set(ICU_ROOT "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows")
+    if(CMAKE_BUILD_TYPE MATCHES Debug)
+        set(ICU_ROOT "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/debug")
+        set(ICU_INCLUDE_DIR "${ICU_ROOT}/../include")
+    else ()
+        set(ICU_ROOT "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows")
+    endif ()
     find_package(ICU 61.2 REQUIRED COMPONENTS data i18n uc)
     if(ICU_FOUND)
         message(">> ICU_FOUND ${ICU_FOUND} ${ICU_VERSION} ${ICU_LIBRARIES} ${ICU_INCLUDE_DIRS}")

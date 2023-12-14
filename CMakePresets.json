@@ -34,6 +34,17 @@
       }
     },
     {
+      "name": "jsconly-debug",
+      "inherits": ["jsconly"],
+      "binaryDir": "WebKitBuild/JSCOnly/Debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": {
+          "type": "STRING",
+          "value": "Debug"
+        }
+      }
+    },
+    {
       "name": "release",
       "hidden": true,
       "cacheVariables": {
@@ -109,6 +120,10 @@
     {
       "name": "jsconly",
       "configurePreset": "jsconly"
+    },
+    {
+      "name": "jsconly-debug",
+      "configurePreset": "jsconly-debug"
     },
     {
       "name": "gtk-release",
